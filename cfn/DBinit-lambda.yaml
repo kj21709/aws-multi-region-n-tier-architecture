@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DB init Lambda (Create table in RDS on stack creation) 
+
+Parameters:
+  LambdaFunctionName:
+    Type: String
+    Default: DBInitLambda
+
+  RDSStackName:
+    Type: String
+
+  DBSecretName:
+    Type: String
+    Default: visitor-app-dev-mysql-credentials
+
+Resources:
+  DBInitLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${LambdaFunctionName}-role-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole  
+
+      Policies:
+        - PolicyName: ReadDbSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${DBSecretName}-*"
+
+  DBInitLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Handler: index.lambda_handler
+      Runtime: python3.12
+      Role: !GetAtt DBInitLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+
+      Environment:
+        Variables:
+          DB_HOST:
+            Fn::ImportValue: !Sub "${RDSStackName}-RDSEndpoint"
+          DB_PORT:
+            Fn::ImportValue: !Sub "${RDSStackName}-RDSPort"
+          DB_NAME:
+            Fn::ImportValue: !Sub "${RDSStackName}-DBName"
+          DB_SECRET_NAME: !Ref DBSecretName
+
+      Layers:
+        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-mysql-connector-python:9"
+
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue PrivateSubnet1Id
+          - !ImportValue PrivateSubnet2Id
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${RDSStackName}-LambdaSecurityGroupId"
+
+
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          import urllib.request
+
+          def send_response(event, context, status, data):
+              response_body = json.dumps({
+                  'Status': status,
+                  'Reason': 'See CloudWatch Logs',
+                  'PhysicalResourceId': context.log_stream_name,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': data
+              })
+
+              req = urllib.request.Request(
+                  event['ResponseURL'],
+                  data=response_body.encode('utf-8'),
+                  method='PUT',
+                  headers={'Content-Type': ''}
+              )
+              urllib.request.urlopen(req)
+
+          def lambda_handler(event, context):
+              print("EVENT:", json.dumps(event))
+
+              if event['RequestType'] == 'Delete':
+                  send_response(event, context, "SUCCESS", {})
+                  return
+
+              try:
+                  import mysql.connector
+                  client = boto3.client('secretsmanager')
+                  res = client.get_secret_value(SecretId=os.environ['SECRET_ARN'])
+                  pw = json.loads(res['SecretString'])['password']
+
+                  conn = mysql.connector.connect(
+                      host=os.environ['DB_HOST'],
+                      user=os.environ['DB_USER'],
+                      password=pw,
+                      database=os.environ['DB_NAME'],
+                      connect_timeout=15
+                  )
+
+                  cur = conn.cursor()
+                  cur.execute("""
+                      CREATE TABLE IF NOT EXISTS VISITOR_LOG (
+                          ID INT AUTO_INCREMENT PRIMARY KEY,
+                          IP_ADDRESS VARCHAR(45),
+                          CITY_NAME VARCHAR(100),
+                          STATE VARCHAR(100),
+                          COUNTRY VARCHAR(100),
+                          CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                      );
+                  """)
+                  conn.commit()
+                  cur.close()
+                  conn.close()
+
+                  send_response(event, context, "SUCCESS", {"Message": "Table Created"})
+
+              except Exception as e:
+                  print("ERROR:", str(e))
+                  send_response(event, context, "FAILED", {"Error": str(e)})
+
+  RunTableCreation:
+    Type: Custom::TableInit
+    Properties:
+      ServiceToken: !GetAtt DBInitLambda.Arn

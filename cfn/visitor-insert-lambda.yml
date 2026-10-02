@@ -1,0 +1,214 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Visitor API Lambda (GET + POST) -> MySQL RDS using Secrets Manager
+
+Parameters:
+  LambdaFunctionName:
+    Type: String
+    Default: visitor-insert-lambda
+
+  RDSStackName:
+    Type: String
+
+  DBSecretName:
+    Type: String
+    Default: visitor-app-dev-mysql-credentials
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${LambdaFunctionName}-role-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: ReadDbSecret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${DBSecretName}-*"
+
+  VisitorInsertLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+
+      Environment:
+        Variables:
+          DB_HOST:
+            Fn::ImportValue: !Sub "${RDSStackName}-RDSEndpoint"
+          DB_PORT:
+            Fn::ImportValue: !Sub "${RDSStackName}-RDSPort"
+          DB_NAME:
+            Fn::ImportValue: !Sub "${RDSStackName}-DBName"
+          DB_SECRET_NAME: !Ref DBSecretName
+
+      Layers:
+        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-mysql-connector-python:9"
+
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue PrivateSubnet1Id
+          - !ImportValue PrivateSubnet2Id
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${RDSStackName}-LambdaSecurityGroupId"
+
+      Code:
+        ZipFile: |
+          import os, json, base64
+          import boto3
+          import mysql.connector
+
+          sm = boto3.client("secretsmanager")
+
+          def _resp(code, body):
+              return {
+                  "statusCode": code,
+                  "headers": {
+                      "Content-Type": "application/json",
+                      "Access-Control-Allow-Origin": "*",
+                      "Access-Control-Allow-Headers": "Content-Type",
+                      "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
+                  },
+                  "body": json.dumps(body)
+              }
+
+          def _get_source_ip(event: dict) -> str:
+              return (
+                  event.get("requestContext", {}).get("http", {}).get("sourceIp")
+                  or event.get("requestContext", {}).get("identity", {}).get("sourceIp")
+                  or "Unknown"
+              )
+
+          def _parse_json_body(event: dict) -> dict:
+              body = event.get("body") or ""
+              if not body:
+                  return {}
+              if event.get("isBase64Encoded"):
+                  body = base64.b64decode(body).decode("utf-8")
+              try:
+                  return json.loads(body)
+              except Exception:
+                  return {}
+
+          def _get_db_creds():
+              secret_name = os.environ["DB_SECRET_NAME"]
+              resp = sm.get_secret_value(SecretId=secret_name)
+              secret = json.loads(resp.get("SecretString", "{}"))
+              return secret["username"], secret["password"]
+
+          def lambda_handler(event, context):
+              method = (
+                  event.get("requestContext", {}).get("http", {}).get("method")
+                  or event.get("httpMethod")
+                  or "GET"
+              )
+
+              if method == "OPTIONS":
+                  return _resp(200, {"ok": True})
+
+              db_host = os.environ["DB_HOST"]
+              db_port = int(os.environ.get("DB_PORT", "3306"))
+              db_name = os.environ["DB_NAME"]
+
+              conn = None
+              cur = None
+              try:
+                  db_user, db_pass = _get_db_creds()
+
+                  conn = mysql.connector.connect(
+                      host=db_host,
+                      port=db_port,
+                      user=db_user,
+                      password=db_pass,
+                      database=db_name,
+                      connect_timeout=10
+                  )
+                  cur = conn.cursor(dictionary=True)
+
+                  if method == "POST":
+                      body = _parse_json_body(event)
+                      city = body.get("city", "Unknown")
+                      state = body.get("state", "Unknown")
+                      country = body.get("country", "Unknown")
+                      ip_addr = _get_source_ip(event)
+
+                      cur.execute(
+                          "INSERT INTO VISITOR_LOG (IP_ADDRESS, CITY_NAME, STATE, COUNTRY) VALUES (%s, %s, %s, %s)",
+                          (ip_addr, city, state, country)
+                      )
+                      conn.commit()
+                      inserted_id = cur.lastrowid
+
+                      cur.execute("SELECT COUNT(*) AS total FROM VISITOR_LOG")
+                      count_row = cur.fetchone()
+                      visitor_count = count_row["total"] if count_row else 0
+
+                      return _resp(200, {
+                          "message": "Check-in successful!",
+                          "id": inserted_id,
+                          "visitor_count": visitor_count,
+                          "ip": ip_addr
+                      })
+
+                  params = event.get("queryStringParameters") or {}
+                  target_id = params.get("id")
+                  if not target_id:
+                      return _resp(400, {"message": "Missing query param: id"})
+
+                  query = """
+                  SELECT
+                    ID as id,
+                    IP_ADDRESS as ip,
+                    CITY_NAME as city,
+                    STATE as region,
+                    COUNTRY as country
+                  FROM VISITOR_LOG
+                  WHERE ID = %s
+                  """
+                  cur.execute(query, (target_id,))
+                  row = cur.fetchone()
+                  if not row:
+                      return _resp(404, {"message": "ID not found"})
+
+                  return _resp(200, row)
+
+              except Exception as e:
+                  return _resp(500, {"error": str(e)})
+              finally:
+                  try:
+                      if cur:
+                          cur.close()
+                      if conn and conn.is_connected():
+                          conn.close()
+                  except Exception:
+                      pass
+
+Outputs:
+  StackName:
+    Value: !Ref AWS::StackName
+
+  VisitorLambdaArn:
+    Value: !GetAtt VisitorInsertLambda.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-VisitorLambdaArn"
+
+  VisitorLambdaName:
+    Value: !Ref VisitorInsertLambda
+    Export:
+      Name: !Sub "${AWS::StackName}-VisitorLambdaName"

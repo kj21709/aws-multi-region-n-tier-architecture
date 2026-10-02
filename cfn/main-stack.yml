@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Master Stack - VPC + RDS/Secrets (Primary) + optional Replica (Secondary) + Lambda + HTTP API + S3/CloudFront + S3 Replication
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: visitor-app
+
+  Environment:
+    Type: String
+    Default: dev
+
+  DRMode:
+    Type: String
+    Default: primary
+    AllowedValues: [primary, secondary]
+
+  PrimaryDbArn:
+    Type: String
+    Default: ""
+
+  ReplicaRegion:
+    Type: String
+    Default: eu-west-2
+
+  ReplicationDestinationBucketArn:
+    Type: String
+    Default: ""
+
+  ReplicationSourceRoleArn:
+    Type: String
+    Default: ""
+
+Conditions:
+  IsPrimary: !Equals [!Ref DRMode, primary]
+  HasPrimaryDbArn: !Not [!Equals [!Ref PrimaryDbArn, ""]]
+  CreateReplica: !And
+    - !Equals [!Ref DRMode, secondary]
+    - !Condition HasPrimaryDbArn
+
+  HasDbEndpoint: !Or [!Condition IsPrimary, !Condition CreateReplica]
+
+Resources:
+  VPC:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/vpc-stack.yml
+
+  Database:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: VPC
+    Properties:
+      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/rds+SCM.yml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        DRMode: !Ref DRMode
+        PrimaryDbArn: !Ref PrimaryDbArn
+        SecretName: !Sub "${ProjectName}-${Environment}-mysql-credentials"
+        ReplicaRegion: !Ref ReplicaRegion
+
+  LambdaBackend:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasDbEndpoint
+    DependsOn: Database
+    Properties:
+      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/visitor-insert-lambda.yml
+      Parameters:
+        LambdaFunctionName: !Sub "${ProjectName}-${Environment}-visitor-lambda"
+        RDSStackName: !GetAtt Database.Outputs.StackName
+        DBSecretName: !Sub "${ProjectName}-${Environment}-mysql-credentials"
+
+  ApiGateway:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasDbEndpoint
+    DependsOn: LambdaBackend
+    Properties:
+      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/HTTP+API-v2-stack.yml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        VisitorLambdaArn: !GetAtt LambdaBackend.Outputs.VisitorLambdaArn
+
+  StaticSite:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/s3+OAC+CF-stack.yml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        Environment: !Ref Environment
+        DRMode: !Ref DRMode
+        ReplicationDestinationBucketArn: !Ref ReplicationDestinationBucketArn
+        ReplicationSourceRoleArn: !Ref ReplicationSourceRoleArn
+
+Outputs:
+  StackName:
+    Value: !Ref AWS::StackName
+
+  SiteBucketName:
+    Value: !GetAtt StaticSite.Outputs.BucketName
+
+  SiteBucketArn:
+    Value: !GetAtt StaticSite.Outputs.BucketArn
+
+  CloudFrontDomainName:
+    Condition: IsPrimary
+    Value: !GetAtt StaticSite.Outputs.CloudFrontDomainName
+
+  CloudFrontDistributionId:
+    Condition: IsPrimary
+    Value: !GetAtt StaticSite.Outputs.CloudFrontDistributionId
+
+  ReplicationRoleArn:
+    Condition: IsPrimary
+    Value: !GetAtt StaticSite.Outputs.ReplicationRoleArn
+
+  RegisterEndpoint:
+    Condition: HasDbEndpoint
+    Value: !GetAtt ApiGateway.Outputs.RegisterEndpoint
+
+  PrimaryDbArnOut:
+    Condition: IsPrimary
+    Value: !GetAtt Database.Outputs.PrimaryDbArn

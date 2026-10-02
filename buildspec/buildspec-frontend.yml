@@ -1,0 +1,51 @@
+version: 0.2
+
+env:
+  variables:
+    PRIMARY_REGION: "us-east-1"
+    MASTER_STACK_NAME_PRIMARY: "visitor-app-dev-primary"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - |
+        set -e
+        echo "Install jq..."
+        yum -y install jq >/dev/null 2>&1 || true
+
+  build:
+    commands:
+      - |
+        set -euo pipefail
+
+        echo "PWD=$(pwd)"
+        ls -la
+
+        echo "Reading outputs from master stack (PRIMARY)..."
+        STACK_JSON=$(aws cloudformation describe-stacks --region "${PRIMARY_REGION}" --stack-name "${MASTER_STACK_NAME_PRIMARY}")
+
+        API_URL=$(echo "$STACK_JSON" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="RegisterEndpoint") | .OutputValue')
+        SITE_BUCKET=$(echo "$STACK_JSON" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="SiteBucketName") | .OutputValue')
+        CF_DIST_ID=$(echo "$STACK_JSON" | jq -r '.Stacks[0].Outputs[] | select(.OutputKey=="CloudFrontDistributionId") | .OutputValue')
+
+        echo "API_URL from stack = $API_URL"
+        echo "SITE_BUCKET = $SITE_BUCKET"
+        echo "CF_DIST_ID = $CF_DIST_ID"
+
+        API_URL=$(echo "$API_URL" | sed 's#/*$##')
+        if [[ "$API_URL" != *"/register" ]]; then
+          API_URL="${API_URL}/register"
+        fi
+
+        echo "Final API_URL = $API_URL"
+
+        echo "Replacing placeholder in app.js..."
+        sed -i "s#const API_URL = \"__API_URL__\";#const API_URL = \"${API_URL}\";#g" app/app.js
+
+        echo "Uploading site to S3..."
+        aws s3 sync app/ "s3://${SITE_BUCKET}/" --delete
+
+        echo "Invalidating CloudFront cache..."
+        aws cloudfront create-invalidation --distribution-id "${CF_DIST_ID}" --paths "/*"

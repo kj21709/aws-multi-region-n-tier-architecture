@@ -1,0 +1,199 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: MySQL RDS (private) + Secrets Manager (primary only) + optional cross-region read replica (secondary)
+
+Parameters:
+  DBName:
+    Type: String
+    Default: rdslabdb
+
+  DBUser:
+    Type: String
+    Default: dbadmin
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+
+  AllocatedStorage:
+    Type: Number
+    Default: 10
+
+  EngineVersion:
+    Type: String
+    Default: "8.0"
+
+  ProjectName:
+    Type: String
+    Default: visitor-app
+
+  Environment:
+    Type: String
+    Default: dev
+
+  DRMode:
+    Type: String
+    Default: primary
+    AllowedValues: [primary, secondary]
+
+  # Used only when DRMode=secondary (cross-region read replica source ARN)
+  PrimaryDbArn:
+    Type: String
+    Default: ""
+
+  # Stable secret name across regions (replicated from primary via Secrets Manager)
+  SecretName:
+    Type: String
+    Default: visitor-app-dev-mysql-credentials
+
+  # Region for Secrets Manager replication (only used in primary)
+  ReplicaRegion:
+    Type: String
+    Default: eu-west-2
+
+Conditions:
+  IsPrimary: !Equals [!Ref DRMode, primary]
+  HasPrimaryDbArn: !Not [!Equals [!Ref PrimaryDbArn, ""]]
+
+  # Create a cross-region read replica only in SECONDARY and only if PrimaryDbArn is provided
+  CreateReplica: !And
+    - !Equals [!Ref DRMode, secondary]
+    - !Condition HasPrimaryDbArn
+
+  # We only export endpoint/port when a DB (primary or replica) exists
+  HasDbEndpoint: !Or [!Condition IsPrimary, !Condition CreateReplica]
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for MySQL RDS
+      SubnetIds:
+        - !ImportValue PrivateSubnet1Id
+        - !ImportValue PrivateSubnet2Id
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for app Lambdas
+      VpcId: !ImportValue VpcId
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow MySQL access from Lambda SG
+      VpcId: !ImportValue VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  # PRIMARY creates the secret and replicates it to ReplicaRegion
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: IsPrimary
+    Properties:
+      Name: !Ref SecretName
+      Description: "Master credentials for MySQL RDS"
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${DBUser}"}'
+        GenerateStringKey: "password"
+        PasswordLength: 24
+        ExcludeCharacters: '"@/\\'
+      ReplicaRegions:
+        - Region: !Ref ReplicaRegion
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-mysql-credentials"
+
+  # PRIMARY DB
+  MySQLPrimary:
+    Type: AWS::RDS::DBInstance
+    Condition: IsPrimary
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-${Environment}-mysql-primary"
+      Engine: mysql
+      EngineVersion: !Ref EngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref AllocatedStorage
+      DBName: !Ref DBName
+
+      # Needed for replica eligibility
+      BackupRetentionPeriod: 7
+
+      MasterUsername: !Sub "{{resolve:secretsmanager:${SecretName}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${SecretName}:SecretString:password}}"
+
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+
+      MultiAZ: true
+      PubliclyAccessible: false
+
+  # SECONDARY cross-region read replica
+  MySQLReadReplica:
+    Type: AWS::RDS::DBInstance
+    Condition: CreateReplica
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-${Environment}-mysql-replica-${AWS::Region}"
+
+      # Cross-region replica: Source is ARN and you must specify SourceRegion
+      SourceDBInstanceIdentifier: !Ref PrimaryDbArn
+      SourceRegion: !Select [3, !Split [":", !Ref PrimaryDbArn]]
+
+      DBInstanceClass: !Ref DBInstanceClass
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+
+      PubliclyAccessible: false
+      MultiAZ: false
+
+Outputs:
+  StackName:
+    Value: !Ref AWS::StackName
+
+  DBSecretName:
+    Value: !Ref SecretName
+    Export:
+      Name: !Sub "${AWS::StackName}-DBSecretName"
+
+  LambdaSecurityGroupId:
+    Value: !Ref LambdaSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaSecurityGroupId"
+
+  # Export endpoint/port only when DB exists (primary or replica)
+  RDSEndpoint:
+    Condition: HasDbEndpoint
+    Value: !If
+      - IsPrimary
+      - !GetAtt MySQLPrimary.Endpoint.Address
+      - !GetAtt MySQLReadReplica.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-RDSEndpoint"
+
+  RDSPort:
+    Condition: HasDbEndpoint
+    Value: !If
+      - IsPrimary
+      - !GetAtt MySQLPrimary.Endpoint.Port
+      - !GetAtt MySQLReadReplica.Endpoint.Port
+    Export:
+      Name: !Sub "${AWS::StackName}-RDSPort"
+
+  DBName:
+    Value: !Ref DBName
+    Export:
+      Name: !Sub "${AWS::StackName}-DBName"
+
+  PrimaryDbArn:
+    Condition: IsPrimary
+    Value: !GetAtt MySQLPrimary.DBInstanceArn
+    Export:
+      Name: !Sub "${AWS::StackName}-PrimaryDbArn"

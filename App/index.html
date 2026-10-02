@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visitor Sequence Portal</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="mesh-bg"></div>
+    
+    <div class="container">
+        <div class="glass-card">
+            <h1>Join the Sequence</h1>
+            <p>Assign yourself the next unique ID in our database.</p>
+            <button id="submitBtn">Get My ID</button>
+            
+            <div id="registerResult" class="hidden result-box">
+                <p>Registration Successful!</p>
+                <div class="id-display">ID: <span id="newId">--</span></div>
+            </div>
+        </div>
+
+        <div class="glass-card">
+            <h1>Lookup Visitor</h1>
+            <p>Enter an ID to fetch location data from RDS.</p>
+            <div class="search-group">
+                <input type="number" id="lookupId" placeholder="Enter ID number...">
+                <button id="fetchBtn">Fetch</button>
+            </div>
+
+            <div id="fetchResult" class="hidden info-display">
+                <div class="info-row">
+                    <span>Location:</span>
+                    <strong id="resLoc">--</strong>
+                </div>
+                <div class="info-row">
+                    <span>IP Address:</span>
+                    <strong id="resIp">--</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

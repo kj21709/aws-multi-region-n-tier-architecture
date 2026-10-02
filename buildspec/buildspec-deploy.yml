@@ -1,0 +1,186 @@
+version: 0.2
+
+env:
+  variables:
+    PRIMARY_REGION: "us-east-1"
+    SECONDARY_REGION: "eu-west-2"
+    PRIMARY_STACK_NAME: "visitor-app-dev-primary"
+    SECONDARY_STACK_NAME: "visitor-app-dev-secondary"
+    PROJECT_NAME: "visitor-app"
+    ENVIRONMENT: "dev"
+    REPLICA_REGION: "eu-west-2"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - |
+        set -e
+        echo "Install jq..."
+        yum -y install jq >/dev/null 2>&1 || true
+
+  build:
+    commands:
+      - |
+        set -euo pipefail
+        set -x
+
+        echo "PWD=$(pwd)"
+        ls -la
+
+        test -f packaged-primary.yaml
+        test -f packaged-secondary.yaml
+
+        wait_stack () {
+          local region="$1"
+          local name="$2"
+
+          # If stack doesn't exist yet, create-wait is appropriate
+          if ! aws cloudformation describe-stacks --region "$region" --stack-name "$name" >/dev/null 2>&1; then
+            aws cloudformation wait stack-create-complete --region "$region" --stack-name "$name"
+            return
+          fi
+
+          # Stack exists -> wait for update complete (covers both create+update cases safely)
+          # But if it's currently creating, update-wait will fail, so try create-wait first.
+          aws cloudformation wait stack-create-complete --region "$region" --stack-name "$name" \
+            || aws cloudformation wait stack-update-complete --region "$region" --stack-name "$name"
+        }
+
+        get_nested_stack_id () {
+          local region="$1"
+          local parent="$2"
+          local logical_id="$3"
+
+          aws cloudformation list-stack-resources \
+            --region "$region" \
+            --stack-name "$parent" \
+            --output json \
+          | jq -r --arg LID "$logical_id" '
+              .StackResourceSummaries[]
+              | select(.LogicalResourceId==$LID)
+              | .PhysicalResourceId
+            ' | head -n 1
+        }
+
+        get_output () {
+          local region="$1"
+          local stack="$2"
+          local key="$3"
+
+          aws cloudformation describe-stacks --region "$region" --stack-name "$stack" --output json \
+          | jq -r --arg K "$key" '
+              .Stacks[0].Outputs[]? | select(.OutputKey==$K) | .OutputValue
+            ' | head -n 1
+        }
+
+        echo "1) Deploy SECONDARY (standby) first..."
+        aws cloudformation deploy \
+          --region "${SECONDARY_REGION}" \
+          --template-file packaged-secondary.yaml \
+          --stack-name "${SECONDARY_STACK_NAME}" \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --no-fail-on-empty-changeset \
+          --parameter-overrides \
+            ProjectName="${PROJECT_NAME}" \
+            Environment="${ENVIRONMENT}" \
+            DRMode="secondary" \
+            PrimaryDbArn="" \
+            ReplicaRegion="${REPLICA_REGION}" \
+            ReplicationDestinationBucketArn="" \
+            ReplicationSourceRoleArn=""
+
+        echo "Waiting for SECONDARY stack..."
+        wait_stack "${SECONDARY_REGION}" "${SECONDARY_STACK_NAME}"
+
+        echo "Find SECONDARY nested StaticSite stack id..."
+        SEC_STATIC_ID=$(get_nested_stack_id "${SECONDARY_REGION}" "${SECONDARY_STACK_NAME}" "StaticSite")
+        if [ -z "${SEC_STATIC_ID}" ] || [ "${SEC_STATIC_ID}" = "null" ]; then
+          echo "ERROR: Could not find nested stack PhysicalResourceId for StaticSite in SECONDARY"
+          aws cloudformation list-stack-resources --region "${SECONDARY_REGION}" --stack-name "${SECONDARY_STACK_NAME}" --output json | jq '.'
+          exit 1
+        fi
+
+        echo "Read SECONDARY bucket ARN from nested StaticSite stack outputs..."
+        SECONDARY_BUCKET_ARN=$(get_output "${SECONDARY_REGION}" "${SEC_STATIC_ID}" "BucketArn")
+        if [ -z "${SECONDARY_BUCKET_ARN}" ] || [ "${SECONDARY_BUCKET_ARN}" = "null" ]; then
+          echo "ERROR: Could not read BucketArn from SECONDARY StaticSite outputs"
+          aws cloudformation describe-stacks --region "${SECONDARY_REGION}" --stack-name "${SEC_STATIC_ID}" --output json | jq -r '.Stacks[0].Outputs'
+          exit 1
+        fi
+        echo "SECONDARY_BUCKET_ARN=$SECONDARY_BUCKET_ARN"
+
+        echo "2) Deploy PRIMARY with replication destination bucket ARN..."
+        aws cloudformation deploy \
+          --region "${PRIMARY_REGION}" \
+          --template-file packaged-primary.yaml \
+          --stack-name "${PRIMARY_STACK_NAME}" \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --no-fail-on-empty-changeset \
+          --parameter-overrides \
+            ProjectName="${PROJECT_NAME}" \
+            Environment="${ENVIRONMENT}" \
+            DRMode="primary" \
+            PrimaryDbArn="" \
+            ReplicaRegion="${REPLICA_REGION}" \
+            ReplicationDestinationBucketArn="${SECONDARY_BUCKET_ARN}" \
+            ReplicationSourceRoleArn=""
+
+        echo "Waiting for PRIMARY stack..."
+        wait_stack "${PRIMARY_REGION}" "${PRIMARY_STACK_NAME}"
+
+        echo "Find PRIMARY nested stacks (Database + StaticSite)..."
+        PRI_DB_ID=$(get_nested_stack_id "${PRIMARY_REGION}" "${PRIMARY_STACK_NAME}" "Database")
+        PRI_STATIC_ID=$(get_nested_stack_id "${PRIMARY_REGION}" "${PRIMARY_STACK_NAME}" "StaticSite")
+
+        if [ -z "${PRI_DB_ID}" ] || [ "${PRI_DB_ID}" = "null" ]; then
+          echo "ERROR: Could not find nested stack PhysicalResourceId for Database in PRIMARY"
+          aws cloudformation list-stack-resources --region "${PRIMARY_REGION}" --stack-name "${PRIMARY_STACK_NAME}" --output json | jq '.'
+          exit 1
+        fi
+
+        if [ -z "${PRI_STATIC_ID}" ] || [ "${PRI_STATIC_ID}" = "null" ]; then
+          echo "ERROR: Could not find nested stack PhysicalResourceId for StaticSite in PRIMARY"
+          aws cloudformation list-stack-resources --region "${PRIMARY_REGION}" --stack-name "${PRIMARY_STACK_NAME}" --output json | jq '.'
+          exit 1
+        fi
+
+        echo "Read PRIMARY replication role ARN from nested StaticSite stack outputs..."
+        PRIMARY_REPL_ROLE_ARN=$(get_output "${PRIMARY_REGION}" "${PRI_STATIC_ID}" "ReplicationRoleArn")
+        if [ -z "${PRIMARY_REPL_ROLE_ARN}" ] || [ "${PRIMARY_REPL_ROLE_ARN}" = "null" ]; then
+          echo "ERROR: Could not read ReplicationRoleArn from PRIMARY StaticSite outputs"
+          aws cloudformation describe-stacks --region "${PRIMARY_REGION}" --stack-name "${PRI_STATIC_ID}" --output json | jq -r '.Stacks[0].Outputs'
+          exit 1
+        fi
+        echo "PRIMARY_REPL_ROLE_ARN=$PRIMARY_REPL_ROLE_ARN"
+
+        echo "Read PRIMARY DB ARN from nested Database stack outputs..."
+        PRIMARY_DB_ARN=$(get_output "${PRIMARY_REGION}" "${PRI_DB_ID}" "PrimaryDbArn")
+        if [ -z "${PRIMARY_DB_ARN}" ] || [ "${PRIMARY_DB_ARN}" = "null" ]; then
+          echo "ERROR: Could not read PrimaryDbArn from PRIMARY Database outputs"
+          aws cloudformation describe-stacks --region "${PRIMARY_REGION}" --stack-name "${PRI_DB_ID}" --output json | jq -r '.Stacks[0].Outputs'
+          exit 1
+        fi
+        echo "PRIMARY_DB_ARN=$PRIMARY_DB_ARN"
+
+        echo "3) Update SECONDARY with replication role + DB ARN..."
+        aws cloudformation deploy \
+          --region "${SECONDARY_REGION}" \
+          --template-file packaged-secondary.yaml \
+          --stack-name "${SECONDARY_STACK_NAME}" \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --no-fail-on-empty-changeset \
+          --parameter-overrides \
+            ProjectName="${PROJECT_NAME}" \
+            Environment="${ENVIRONMENT}" \
+            DRMode="secondary" \
+            PrimaryDbArn="${PRIMARY_DB_ARN}" \
+            ReplicaRegion="${REPLICA_REGION}" \
+            ReplicationDestinationBucketArn="" \
+            ReplicationSourceRoleArn="${PRIMARY_REPL_ROLE_ARN}"
+
+        echo "Waiting for SECONDARY update..."
+        wait_stack "${SECONDARY_REGION}" "${SECONDARY_STACK_NAME}"
+
+        echo "Done infra deploy."

@@ -1,0 +1,64 @@
+version: 0.2
+
+env:
+  variables:
+    MASTER_TEMPLATE: "cfn/main-stack.yml"
+    PRIMARY_REGION: "us-east-1"
+    SECONDARY_REGION: "eu-west-2"
+    TEMPLATE_BUCKET_PRIMARY: "dr-ntier-cfn-templates-use1-bucket"
+    TEMPLATE_BUCKET_SECONDARY: "dr-ntier-cfn-templates-euw2-bucket"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - echo "Install phase (no linting)."
+
+  build:
+    commands:
+      - |
+        set -euo pipefail
+        set -x
+        cd "$CODEBUILD_SRC_DIR"
+
+        echo "PWD=$(pwd)"
+        ls -la
+
+        echo "Show MASTER template TemplateURL lines:"
+        grep -n "TemplateURL:" "${MASTER_TEMPLATE}" || true
+
+        echo "Verify nested templates exist (relative to repo root):"
+        test -f cfn/vpc-stack.yml
+        test -f cfn/rds+SCM.yml
+        test -f cfn/visitor-insert-lambda.yml
+        test -f "cfn/HTTP+API-v2-stack.yml"
+        test -f cfn/s3+OAC+CF-stack.yml
+
+        echo "Check bucket regions (must match the region you package with):"
+        aws s3api get-bucket-location --bucket "${TEMPLATE_BUCKET_PRIMARY}" --region "${PRIMARY_REGION}" || true
+        aws s3api get-bucket-location --bucket "${TEMPLATE_BUCKET_SECONDARY}" --region "${SECONDARY_REGION}" || true
+
+        echo "Packaging for PRIMARY region..."
+        aws cloudformation package \
+          --region "${PRIMARY_REGION}" \
+          --template-file "${MASTER_TEMPLATE}" \
+          --s3-bucket "${TEMPLATE_BUCKET_PRIMARY}" \
+          --output-template-file packaged-primary.yaml
+
+        echo "Packaging for SECONDARY region..."
+        aws cloudformation package \
+          --region "${SECONDARY_REGION}" \
+          --template-file "${MASTER_TEMPLATE}" \
+          --s3-bucket "${TEMPLATE_BUCKET_SECONDARY}" \
+          --output-template-file packaged-secondary.yaml
+
+        echo "Verify packaged outputs exist..."
+        ls -la packaged-primary.yaml packaged-secondary.yaml
+
+artifacts:
+  files:
+    - packaged-primary.yaml
+    - packaged-secondary.yaml
+    - buildspec-deploy.yml
+    - buildspec-frontend.yml

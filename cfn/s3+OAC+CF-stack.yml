@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: S3 private bucket in both regions + (PRIMARY only) OAC+CloudFront + replication (PRIMARY->SECONDARY)
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: visitor-app
+
+  Environment:
+    Type: String
+    Default: dev
+
+  DRMode:
+    Type: String
+    Default: primary
+    AllowedValues: [primary, secondary]
+
+  # Used only by PRIMARY to set replication destination
+  ReplicationDestinationBucketArn:
+    Type: String
+    Default: ""
+
+  # Used only by SECONDARY to allow primary replication role to write
+  ReplicationSourceRoleArn:
+    Type: String
+    Default: ""
+
+Conditions:
+  IsPrimary: !Equals [!Ref DRMode, primary]
+  IsSecondary: !Equals [!Ref DRMode, secondary]
+
+  HasDestArnValue: !Not [!Equals [!Ref ReplicationDestinationBucketArn, ""]]
+  HasSourceRoleValue: !Not [!Equals [!Ref ReplicationSourceRoleArn, ""]]
+
+  # Safety: only allow dest ARN usage in PRIMARY
+  HasReplicationDest: !And [!Condition IsPrimary, !Condition HasDestArnValue]
+
+  # Safety: only allow source role usage in SECONDARY
+  HasReplicationSourceRole: !And [!Condition IsSecondary, !Condition HasSourceRoleValue]
+
+Resources:
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+
+      # Replication config goes on the SOURCE bucket (PRIMARY only, when destination ARN is provided)
+      ReplicationConfiguration: !If
+        - HasReplicationDest
+        - Role: !GetAtt ReplicationRole.Arn
+          Rules:
+            - Id: ReplicateAll
+              Status: Enabled
+              Priority: 1
+              Filter: {}
+              DeleteMarkerReplication:
+                Status: Enabled
+              Destination:
+                Bucket: !Ref ReplicationDestinationBucketArn
+                StorageClass: STANDARD
+        - !Ref "AWS::NoValue"
+
+  # Replication role only in PRIMARY (NO inline policy to avoid circular dependency)
+  ReplicationRole:
+    Type: AWS::IAM::Role
+    Condition: IsPrimary
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-s3-repl-role-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sts:AssumeRole
+
+  # Attach replication permissions as a separate resource (breaks circular dependency)
+  ReplicationRolePolicy:
+    Type: AWS::IAM::Policy
+    Condition: IsPrimary
+    Properties:
+      PolicyName: S3ReplicationPolicy
+      Roles:
+        - !Ref ReplicationRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Read replication config + list on source bucket
+          - Effect: Allow
+            Action:
+              - s3:GetReplicationConfiguration
+              - s3:ListBucket
+            Resource: !GetAtt SiteBucket.Arn
+
+          # Read object versions from source bucket
+          - Effect: Allow
+            Action:
+              - s3:GetObjectVersion
+              - s3:GetObjectVersionAcl
+              - s3:GetObjectVersionForReplication
+              - s3:GetObjectVersionTagging
+            Resource: !Sub "${SiteBucket.Arn}/*"
+
+          # Replicate into destination bucket
+          - Effect: Allow
+            Action:
+              - s3:ReplicateObject
+              - s3:ReplicateDelete
+              - s3:ReplicateTags
+              - s3:ObjectOwnerOverrideToBucketOwner
+            Resource: !If
+              - HasReplicationDest
+              - !Sub "${ReplicationDestinationBucketArn}/*"
+              - !Sub "arn:aws:s3:::DO-NOT-USE/*"
+
+  # SECONDARY update step: allow PRIMARY replication role to write into the SECONDARY bucket
+  AllowReplicationFromPrimaryRole:
+    Type: AWS::S3::BucketPolicy
+    Condition: HasReplicationSourceRole
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowReplicationWrites
+            Effect: Allow
+            Principal:
+              AWS: !Ref ReplicationSourceRoleArn
+            Action:
+              - s3:ReplicateObject
+              - s3:ReplicateDelete
+              - s3:ReplicateTags
+              - s3:ObjectOwnerOverrideToBucketOwner
+              - s3:PutObject
+              - s3:PutObjectAcl
+              - s3:PutObjectTagging
+            Resource: !Sub "${SiteBucket.Arn}/*"
+
+  # CloudFront only in PRIMARY
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Condition: IsPrimary
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${ProjectName}-${Environment}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: IsPrimary
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref OriginAccessControl
+
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+
+  # OAC bucket policy (PRIMARY only) using SourceArn for distribution
+  CloudFrontReadPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: IsPrimary
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${SiteBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+Outputs:
+  BucketName:
+    Value: !Ref SiteBucket
+
+  BucketArn:
+    Value: !GetAtt SiteBucket.Arn
+
+  CloudFrontDomainName:
+    Condition: IsPrimary
+    Value: !GetAtt CloudFrontDistribution.DomainName
+
+  CloudFrontDistributionId:
+    Condition: IsPrimary
+    Value: !Ref CloudFrontDistribution
+
+  ReplicationRoleArn:
+    Condition: IsPrimary
+    Value: !GetAtt ReplicationRole.Arn
