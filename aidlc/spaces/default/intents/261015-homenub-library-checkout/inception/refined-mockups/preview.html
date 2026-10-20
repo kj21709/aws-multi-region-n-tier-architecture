@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>Homenub Library — design preview</title>
+  <style>
+    :root { --canvas:#f8f5ee; --surface:#fff; --ink:#20382d; --muted:#54665a; --brand:#24543d; --soft:#e9f0e8; --line:#7a897c; --error:#a62929; --caution:#6b4a13; --focus:#1d4ed8; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--canvas); font:1rem/1.5 system-ui,sans-serif; }
+    h1,h2,h3,p { margin:0; }
+    h1,h2,h3 { font-family:Georgia,"Times New Roman",serif; line-height:1.15; font-weight:500; }
+    a { color:var(--brand); text-underline-offset:4px; }
+    button,input,select { font:inherit; }
+    button,a,input,select { -webkit-tap-highlight-color:transparent; }
+    button,select { min-height:44px; }
+    button { padding:10px 16px; border:1px solid var(--brand); border-radius:8px; background:var(--brand); color:#fff; font-weight:650; cursor:pointer; }
+    button:hover:not(:disabled) { background:#1a402e; }
+    button.secondary { background:var(--surface); color:var(--brand); }
+    button.secondary:hover:not(:disabled) { background:var(--soft); }
+    button:disabled { background:#e7e5de; color:var(--muted); border-color:var(--line); cursor:not-allowed; }
+    :focus-visible { outline:3px solid var(--focus); outline-offset:3px; }
+    h2:focus { outline:3px solid var(--focus); outline-offset:6px; }
+    .skip { position:absolute; left:16px; top:-100px; padding:12px; background:#fff; z-index:3; }
+    .skip:focus { top:8px; }
+    .preview-tools { background:#20382d; color:#fff; padding:14px 24px; }
+    .tool-row { display:flex; flex-wrap:wrap; gap:12px 24px; align-items:center; max-width:1200px; margin:auto; }
+    .tool-row strong { font-size:.9rem; }
+    .tool-row select { border:1px solid #fff; border-radius:6px; padding:6px 12px; max-width:100%; background:#fff; color:var(--ink); }
+    .preview-tools :focus-visible { outline-color:#fff; }
+    .tool-row p { font-size:.85rem; flex:1 1 240px; }
+    .wrap { max-width:1248px; margin:auto; padding:0 24px; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:24px; padding:28px 0; border-bottom:1px solid var(--line); }
+    .brand { text-decoration:none; font-family:Georgia,serif; font-size:1.7rem; color:var(--ink); display:inline-flex; align-items:center; gap:12px; min-height:44px; }
+    .brand-mark { width:34px; height:30px; border:2px solid var(--brand); border-radius:3px 10px 3px 3px; display:inline-block; position:relative; }
+    .brand-mark::after { content:""; position:absolute; left:8px; top:0; bottom:0; border-left:2px solid var(--brand); }
+    nav a { display:inline-block; padding:10px 0; }
+    .intro { padding:44px 0 32px; max-width:720px; }
+    .eyebrow { color:var(--muted); text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; font-weight:700; margin-bottom:12px; }
+    h1 { font-size:clamp(2rem,4.5vw,3.5rem); margin-bottom:16px; }
+    .intro p:last-child { color:var(--muted); font-size:1.05rem; }
+    .policy { display:flex; flex-wrap:wrap; gap:8px 20px; margin-top:20px; color:var(--brand); font-size:.9rem; }
+    .sample-banner { background:var(--soft); border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin-bottom:24px; font-size:.9rem; }
+    .layout { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:32px; align-items:start; padding-bottom:48px; }
+    .section-top { display:flex; gap:16px; align-items:baseline; justify-content:space-between; margin-bottom:20px; }
+    h2 { font-size:1.9rem; }
+    .small,.help { color:var(--muted); font-size:.875rem; }
+    .cards { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; list-style:none; margin:0; padding:0; }
+    .card { padding:24px; background:var(--surface); border:1px solid var(--line); border-radius:16px; display:flex; flex-direction:column; gap:18px; min-width:0; }
+    .card.selected { outline:2px solid var(--brand); outline-offset:2px; }
+    .cover { min-height:150px; display:flex; align-items:center; justify-content:center; padding:20px; background:var(--brand); color:#fff; border-radius:5px 10px 10px 5px; font:2.4rem Georgia,serif; border-left:8px solid #1a402e; }
+    .card:nth-child(2) .cover { background:#e4d4ba; color:var(--ink); border-left-color:#b6a386; }
+    .card:nth-child(3) .cover { background:var(--soft); color:var(--ink); border-left-color:var(--line); }
+    .card:nth-child(4) .cover { background:#e8cec3; color:var(--ink); border-left-color:#b49b8e; }
+    h3 { font-size:1.4rem; overflow-wrap:anywhere; }
+    .author { color:var(--muted); margin-top:7px; font-size:.9rem; }
+    .availability { color:var(--brand); font-size:.875rem; font-weight:650; margin-top:12px; }
+    .availability.blocked { color:var(--caution); }
+    .card button { margin-top:auto; width:100%; }
+    .checkout { border:1px solid var(--line); background:var(--surface); border-radius:16px; padding:28px; min-width:0; }
+    .checkout h2 { font-size:1.75rem; margin-bottom:16px; }
+    .chosen { background:var(--soft); border-radius:8px; padding:16px; margin-bottom:20px; }
+    .chosen strong { display:block; font-family:Georgia,serif; font-size:1.25rem; font-weight:500; }
+    .chosen p { margin-top:6px; }
+    label { display:block; font-weight:650; margin:20px 0 6px; }
+    input { display:block; width:100%; min-width:0; min-height:48px; border:1px solid var(--line); padding:10px 12px; border-radius:8px; color:var(--ink); background:#fff; }
+    input[readonly] { background:#f2f3ef; }
+    input[aria-invalid="true"] { border-color:var(--error); }
+    .error { color:var(--error); font-size:.875rem; margin-top:6px; }
+    .help { margin:12px 0; }
+    .actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:22px; }
+    .actions button { width:100%; min-height:48px; }
+    .notice { padding:16px; border:1px solid var(--line); background:var(--canvas); border-radius:8px; margin-bottom:20px; color:var(--caution); }
+    .notice button { margin-top:16px; }
+    .message { padding:32px; background:#fff; border:1px solid var(--line); border-radius:12px; }
+    .message p { margin:12px 0 20px; }
+    .success-mark { display:inline-flex; align-items:center; justify-content:center; background:var(--soft); color:var(--brand); border-radius:50%; width:48px; height:48px; font-size:1.5rem; margin-bottom:16px; }
+    dl { margin:20px 0; }
+    dt { color:var(--muted); font-size:.875rem; margin-top:16px; }
+    dd { margin:4px 0 0; overflow-wrap:anywhere; font-weight:650; }
+    .skeleton { height:240px; background:var(--soft); border:1px solid var(--line); border-radius:16px; }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+    [hidden] { display:none !important; }
+    footer { padding:24px 0 36px; border-top:1px solid var(--line); color:var(--muted); font-size:.875rem; }
+    @media (max-width:1023px) { .layout { grid-template-columns:minmax(0,1fr); } .checkout { max-width:none; } }
+    @media (max-width:767px) {
+      .wrap { padding:0 16px; } .preview-tools { padding:12px 16px; }
+      header { padding:20px 0; gap:12px; } .brand { font-size:1.4rem; gap:8px; }
+      nav a { font-size:.875rem; } .intro { padding:32px 0 24px; }
+      .cards { grid-template-columns:minmax(0,1fr); gap:16px; }
+      .card { display:grid; grid-template-columns:72px minmax(0,1fr); gap:16px; padding:20px; }
+      .cover { min-height:96px; padding:8px; font-size:1.4rem; grid-row:1 / 3; }
+      .card button { grid-column:2; } h3 { font-size:1.25rem; }
+      .checkout { padding:24px; } .section-top { align-items:start; } h2 { font-size:1.6rem; }
+    }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto !important; animation:none !important; transition:none !important; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to library content</a>
+  <div class="preview-tools" aria-label="Design preview controls">
+    <div class="tool-row">
+      <strong>DESIGN PREVIEW</strong>
+      <label for="scenario" class="sr-only">Preview state</label>
+      <select id="scenario">
+        <option value="catalog">Catalog — no selection</option>
+        <option value="selected">Book selected / checkout</option>
+        <option value="loading">Catalog loading</option>
+        <option value="empty">Empty catalog</option>
+        <option value="catalog-error">Catalog failed</option>
+        <option value="invalid">Invalid form fields</option>
+        <option value="pending">Checkout pending</option>
+        <option value="unavailable">Last copy unavailable</option>
+        <option value="definite-error">Definite checkout failure</option>
+        <option value="uncertain">Checkout outcome uncertain</option>
+        <option value="conflict">Request-details conflict</option>
+        <option value="confirmed">Checkout confirmed</option>
+        <option value="recovery-all">All checkout blocked</option>
+        <option value="recovery-some">Some books blocked</option>
+      </select>
+      <p>No backend, storage or network requests. Outcomes and dates are illustrative.</p>
+    </div>
+  </div>
+  <div class="wrap">
+    <header>
+      <a class="brand" href="#catalog"><span class="brand-mark" aria-hidden="true"></span>Homenub Library</a>
+      <nav aria-label="Library"><a href="#catalog">Browse books</a></nav>
+    </header>
+    <main id="main" tabindex="-1">
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">A little curiosity goes a long way</p>
+        <h1 id="page-title">Find your next read.</h1>
+        <p>A familiar favorite or a new discovery. Choose a book and make a little time for a good story.</p>
+        <div class="policy"><span>14-day loans</span><span>One book per checkout</span><span>No account needed</span></div>
+      </section>
+      <p class="sample-banner"><strong>Sample library.</strong> These books are demo inventory. No checkout is recorded.</p>
+      <p id="status" class="sr-only" role="status" aria-live="polite"></p>
+      <div id="banner" class="notice" role="alert" hidden></div>
+      <div class="layout">
+        <section id="catalog" aria-labelledby="catalog-title">
+          <div class="section-top"><h2 id="catalog-title" tabindex="-1">Browse the shelves</h2><span class="small" id="catalog-count">4 sample books</span></div>
+          <div id="catalog-message"></div>
+          <ul class="cards" id="cards"></ul>
+        </section>
+        <section class="checkout" id="checkout" aria-labelledby="checkout-title"></section>
+      </div>
+    </main>
+    <footer>Homenub Library · A good book is always a good place to start.</footer>
+  </div>
+  <noscript>This local design preview needs JavaScript to show sample states. It never records loans.</noscript>
+  <script>
+    const books = [
+      {id:1,title:"Pride and Prejudice",author:"Jane Austen",count:2,mark:"P & P"},
+      {id:2,title:"The Secret Garden",author:"Frances Hodgson Burnett",count:1,mark:"SG"},
+      {id:3,title:"The Wind in the Willows",author:"Kenneth Grahame",count:0,mark:"WW"},
+      {id:4,title:"Little Women",author:"Louisa May Alcott",count:3,mark:"LW"}
+    ];
+    const byId = id => document.getElementById(id);
+    const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+    let selectedId = null, current = "catalog", timer = null, recoveryMode = null;
+    let draftName = "Alex Reader", draftEmail = "alex@example.test", fieldErrors = {};
+    function render(state, keepSelection = false, preserveDraft = false) {
+      clearTimeout(timer);
+      current = state;
+      byId("scenario").value = state;
+      if (state === "recovery-all") recoveryMode = "all";
+      if (state === "recovery-some") recoveryMode = "some";
+      if (!keepSelection) selectedId = ["catalog","loading","empty","catalog-error"].includes(state) ? null : 1;
+      if (!preserveDraft) {
+        draftName = state === "invalid" ? "" : "Alex Reader";
+        draftEmail = state === "invalid" ? "reader@" : "alex@example.test";
+        fieldErrors = state === "invalid" ? {name:"Enter your name.",email:"Enter a valid email address."} : {};
+      }
+      const allBlocked = recoveryMode === "all", partial = recoveryMode === "some";
+      const locked = ["pending","uncertain","conflict"].includes(state);
+      byId("banner").hidden = !allBlocked && !partial;
+      byId("banner").innerHTML = (allBlocked
+        ? "<p>Checkout is temporarily unavailable. Please try again later. Availability may have changed.</p>"
+        : "<p>Some books are temporarily unavailable while we check availability.</p>") + '<button class="secondary" type="button" data-check>Check availability</button>';
+      byId("catalog").setAttribute("aria-busy", state === "loading" ? "true" : "false");
+      byId("catalog-count").textContent = state === "empty" ? "0 books" : state === "loading" ? "Loading…" : state === "catalog-error" ? "Not loaded" : "4 sample books";
+      const noCards = ["loading","empty","catalog-error"].includes(state);
+      byId("cards").hidden = noCards;
+      byId("catalog-message").innerHTML = state === "loading"
+        ? '<p class="help">Loading books…</p><div class="skeleton" aria-hidden="true"></div>'
+        : state === "empty" ? '<div class="message"><h3>No books are listed yet.</h3><p>Please check back soon.</p></div>'
+        : state === "catalog-error" ? '<div class="message"><h3>We couldn\'t load the books.</h3><p>Please try again.</p><button data-reload>Retry loading</button></div>' : "";
+      byId("cards").innerHTML = books.map(book => {
+        const checking = allBlocked || (partial && book.id === 1);
+        const count = state === "unavailable" && book.id === selectedId ? 0 : book.count;
+        const disabled = checking || count === 0 || locked;
+        const chosen = book.id === selectedId;
+        const availability = checking ? "Checking availability" : count === 0 ? "Unavailable" : `${count} ${count === 1 ? "copy" : "copies"} available`;
+        const action = checking ? "Temporarily unavailable" : count === 0 ? "Unavailable" : chosen ? "Selected" : "Select book";
+        return `<li class="card ${chosen ? "selected" : ""}"><div class="cover" aria-hidden="true">${escapeHtml(book.mark)}</div><div><h3>${escapeHtml(book.title)}</h3><p class="author">${escapeHtml(book.author)}</p><p id="availability-${book.id}" class="availability ${checking ? "blocked" : ""}">${availability}</p></div><button class="${chosen ? "" : "secondary"}" data-book="${book.id}" aria-pressed="${chosen}" aria-label="${action}: ${escapeHtml(book.title)}" aria-describedby="availability-${book.id}" ${disabled ? "disabled" : ""}>${action}</button></li>`;
+      }).join("");
+      const book = books.find(item => item.id === selectedId);
+      const heading = '<h2 id="checkout-title" tabindex="-1">Borrow this book</h2>';
+      if (!book) {
+        byId("checkout").innerHTML = heading + '<p>Choose a book to get started.</p><p class="help">Select an available book, then enter your name and email. Selecting a book does not reserve a copy.</p>';
+      } else if (state === "confirmed") {
+        byId("checkout").innerHTML = '<span class="success-mark" aria-hidden="true">✓</span><h2 id="checkout-title" tabindex="-1">Checkout complete</h2><p>Your sample loan is ready.</p><dl><dt>Book</dt><dd>' + escapeHtml(book.title) + '</dd><dt>Reference</dt><dd>DEMO-0001</dd><dt>Due date</dt><dd><time datetime="2026-11-02">November 2, 2026</time></dd></dl><p class="help">Keep this reference. This is an illustrative result, not a real loan.</p><div class="actions"><button data-browse>Browse books</button></div>';
+      } else {
+        const disabled = allBlocked || (partial && book.id === 1) || state === "unavailable";
+        const stateCopy = {
+          unavailable:"This book is no longer available. Please choose another.",
+          "definite-error":"We couldn't complete the checkout. Please try again.",
+          uncertain:"We haven't confirmed your checkout yet. Retry this checkout to check the result.",
+          conflict:"We couldn't confirm these checkout details. Keep your original checkout details and retry.",
+          "recovery-all":"Checkout is temporarily unavailable. Please try again later.",
+          "recovery-some":"This book is temporarily unavailable while we check availability."
+        };
+        const note = stateCopy[state] ? `<p class="notice">${escapeHtml(stateCopy[state])}</p>` : "";
+        const readOnly = locked ? "readonly" : "";
+        byId("checkout").innerHTML = heading + `<div class="chosen"><strong>${escapeHtml(book.title)}</strong><p class="small">${escapeHtml(book.author)}</p></div>${note}<form id="loan-form" novalidate><label for="borrower-name">Name</label><input id="borrower-name" name="borrowerName" autocomplete="name" required value="${escapeHtml(draftName)}" ${readOnly} ${fieldErrors.name ? 'aria-invalid="true" aria-describedby="name-error"' : ""}>${fieldErrors.name ? '<p id="name-error" class="error">Enter your name.</p>' : ""}<label for="borrower-email">Email</label><input id="borrower-email" name="borrowerEmail" type="email" autocomplete="email" required value="${escapeHtml(draftEmail)}" ${readOnly} aria-describedby="email-help${fieldErrors.email ? " email-error" : ""}" ${fieldErrors.email ? 'aria-invalid="true"' : ""}><p id="email-help" class="help">Your name and email record who is borrowing this book.</p>${fieldErrors.email ? '<p id="email-error" class="error">Enter a valid email address.</p>' : ""}<p class="help">One book. A 14-day loan. Selecting does not reserve a copy.</p><div class="actions"><button type="submit" ${disabled || state === "pending" ? "disabled" : ""}>${state === "pending" ? "Checking out…" : locked ? "Retry checkout" : "Check out book"}</button>${!locked ? '<button class="secondary" type="button" data-change>Change book</button>' : ""}</div></form>`;
+        byId("loan-form").setAttribute("aria-busy", state === "pending" ? "true" : "false");
+      }
+      const announcements = {
+        loading:"Loading books.", empty:"No books are listed yet.",
+        "catalog-error":"Books could not be loaded. Please try again.",
+        invalid:"Check the name and email fields.", pending:"Checking out. Please wait.",
+        unavailable:"This book is no longer available. Please choose another.",
+        "definite-error":"The checkout could not be completed. Please try again.",
+        uncertain:"Your checkout has not been confirmed. Retry the same checkout.",
+        conflict:"The original checkout details must be kept to retry.",
+        confirmed:"Sample checkout complete.",
+        "recovery-all":"Checkout is temporarily unavailable.",
+        "recovery-some":"Some books are temporarily unavailable."
+      };
+      byId("status").textContent = announcements[state] || (book ? `${book.title} selected.` : "Sample catalog ready.");
+    }
+    document.addEventListener("click", event => {
+      const button = event.target.closest("button");
+      if (!button || button.disabled) return;
+      if (button.hasAttribute("data-book")) {
+        selectedId = Number(button.dataset.book);
+        render("selected", true, true);
+        byId("checkout-title").focus();
+      }
+      if (button.hasAttribute("data-change") || button.hasAttribute("data-browse")) {
+        const completed = button.hasAttribute("data-browse");
+        if (completed) { draftName = ""; draftEmail = ""; }
+        selectedId = null;
+        fieldErrors = {};
+        render("catalog", true, true);
+        byId("catalog-title").focus();
+      }
+      if (button.hasAttribute("data-reload")) render("catalog");
+      if (button.hasAttribute("data-check")) byId("status").textContent = "Availability is still being checked. Please try again later.";
+    });
+    document.addEventListener("submit", event => {
+      event.preventDefault();
+      if (event.target.id !== "loan-form" || current === "pending" || recoveryMode === "all" || (recoveryMode === "some" && selectedId === 1) || current === "unavailable") return;
+      draftName = byId("borrower-name").value;
+      draftEmail = byId("borrower-email").value;
+      fieldErrors = {};
+      if (!draftName.trim()) fieldErrors.name = "Enter your name.";
+      if (!byId("borrower-email").validity.valid) fieldErrors.email = "Enter a valid email address.";
+      if (Object.keys(fieldErrors).length) {
+        render("invalid", true, true);
+        byId(fieldErrors.name ? "borrower-name" : "borrower-email").focus();
+        return;
+      }
+      render("pending", true, true);
+      timer = setTimeout(() => { render("confirmed", true, true); byId("checkout-title").focus(); }, 600);
+    });
+    byId("scenario").addEventListener("change", event => {
+      recoveryMode = null;
+      render(event.target.value);
+    });
+    render("catalog");
+  </script>
+</body>
+</html>

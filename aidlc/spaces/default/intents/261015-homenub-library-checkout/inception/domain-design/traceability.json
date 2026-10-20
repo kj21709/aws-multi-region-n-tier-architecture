@@ -1,0 +1,92 @@
+{
+  "stage": "domain-design",
+  "upstream_ids": [
+    "FR1",
+    "FR2",
+    "FR3",
+    "FR4",
+    "FR5",
+    "FR6",
+    "FR7",
+    "FR8",
+    "FR9",
+    "FR10",
+    "FR11",
+    "FR12",
+    "FR13",
+    "FR14"
+  ],
+  "coverage": [
+    {
+      "id": "FR1",
+      "status": "OK",
+      "target": "Circulation"
+    },
+    {
+      "id": "FR2",
+      "status": "OK",
+      "target": "BorrowerExperience"
+    },
+    {
+      "id": "FR3",
+      "status": "OK",
+      "target": "BorrowerExperience"
+    },
+    {
+      "id": "FR4",
+      "status": "OK",
+      "target": "Circulation"
+    },
+    {
+      "id": "FR5",
+      "status": "OK",
+      "target": "Circulation"
+    },
+    {
+      "id": "FR6",
+      "status": "OK",
+      "target": "Circulation"
+    },
+    {
+      "id": "FR7",
+      "status": "OK",
+      "target": "BorrowerExperience"
+    },
+    {
+      "id": "FR8",
+      "status": "OK",
+      "target": "Circulation"
+    },
+    {
+      "id": "FR9",
+      "status": "OK",
+      "target": "SchemaLifecycle"
+    },
+    {
+      "id": "FR10",
+      "status": "OK",
+      "target": "DeliveryPreparation"
+    },
+    {
+      "id": "FR11",
+      "status": "OK",
+      "target": "RecoveryControl"
+    },
+    {
+      "id": "FR12",
+      "status": "OK",
+      "target": "RecoveryControl"
+    },
+    {
+      "id": "FR13",
+      "status": "OK",
+      "target": "DeliveryPreparation"
+    },
+    {
+      "id": "FR14",
+      "status": "OK",
+      "target": "RecoveryControl"
+    }
+  ]
+}
+
