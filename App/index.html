@@ -1,48 +1,35 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visitor Sequence Portal</title>
-    <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Browse Homenub Library and borrow your next book for 14 days.">
+  <title>Homenub Library — Find your next chapter</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js" defer></script>
+  <script src="app.js" defer></script>
 </head>
 <body>
-    <div class="mesh-bg"></div>
-    
-    <div class="container">
-        <div class="glass-card">
-            <h1>Join the Sequence</h1>
-            <p>Assign yourself the next unique ID in our database.</p>
-            <button id="submitBtn">Get My ID</button>
-            
-            <div id="registerResult" class="hidden result-box">
-                <p>Registration Successful!</p>
-                <div class="id-display">ID: <span id="newId">--</span></div>
-            </div>
-        </div>
-
-        <div class="glass-card">
-            <h1>Lookup Visitor</h1>
-            <p>Enter an ID to fetch location data from RDS.</p>
-            <div class="search-group">
-                <input type="number" id="lookupId" placeholder="Enter ID number...">
-                <button id="fetchBtn">Fetch</button>
-            </div>
-
-            <div id="fetchResult" class="hidden info-display">
-                <div class="info-row">
-                    <span>Location:</span>
-                    <strong id="resLoc">--</strong>
-                </div>
-                <div class="info-row">
-                    <span>IP Address:</span>
-                    <strong id="resIp">--</strong>
-                </div>
-            </div>
-        </div>
+  <a class="skip-link" href="#catalog" data-testid="skip-catalog-link">Skip to books</a>
+  <header class="masthead"><a class="brand" href="./" data-testid="library-home-link"><span class="brand-mark" aria-hidden="true">H</span>Homenub <span>Library</span></a><span class="header-note">A little library. A world of stories.</span></header>
+  <main>
+    <section class="intro" aria-labelledby="welcome"><p class="eyebrow">YOUR NEXT CHAPTER STARTS HERE</p><h1 id="welcome">Good books.<br>Closer to home.</h1><p>Find something you’ll love, make it yours for a while, and bring it back in 14 days.</p><div class="intro-note"><span aria-hidden="true">14</span><p>Days to explore<br><strong>One book at a time</strong></p></div></section>
+    <div id="demo-notice" class="notice" hidden>Local demo — fictional sample books and simulated checkouts. Use made-up borrower details.</div>
+    <p id="app-status" class="status" role="status" aria-live="polite" aria-atomic="true" data-testid="app-status"></p>
+    <div class="workspace">
+      <section id="catalog" aria-labelledby="catalog-title"><div class="section-heading"><div><p class="eyebrow">THE BOOKSHELF</p><h2 id="catalog-title">Find your next read</h2></div><button id="refresh" class="secondary" type="button" data-testid="catalog-refresh-button">Refresh books</button></div><p id="catalog-description">Choose an available title to get started.</p><div id="catalog-list" class="book-grid" data-testid="catalog-list" aria-busy="false"></div></section>
+      <aside class="checkout-panel" aria-labelledby="checkout-title"><p class="eyebrow">TAKE A STORY HOME</p><h2 id="checkout-title">Your checkout</h2><p id="selection" data-testid="checkout-selection">Select a book from the shelf.</p>
+        <form id="checkout-form" novalidate data-testid="checkout-form">
+          <label for="borrower-name">Your name</label><input id="borrower-name" name="borrowerName" autocomplete="name" required aria-describedby="name-error" data-testid="checkout-name-input"><p id="name-error" class="field-error"></p>
+          <label for="borrower-email">Email address</label><input id="borrower-email" name="borrowerEmail" type="email" autocomplete="email" maxlength="254" required aria-describedby="email-hint email-error" data-testid="checkout-email-input"><p id="email-hint" class="hint">Used to identify your checkout. No account needed.</p><p id="email-error" class="field-error"></p>
+          <button id="checkout-submit" type="submit" disabled data-testid="checkout-submit-button">Check out this book</button>
+          <button id="checkout-retry" type="button" hidden data-testid="checkout-retry-button">Retry same checkout</button>
+          <p id="checkout-status" role="status" aria-live="polite" aria-atomic="true" data-testid="checkout-status"></p><p class="hint">Due 14 calendar days after checkout. Your confirmation will show the exact date.</p>
+        </form>
+        <section id="confirmation" tabindex="-1" hidden aria-labelledby="confirmation-title" data-testid="checkout-confirmation"><p class="eyebrow">HAPPY READING</p><h3 id="confirmation-title">It’s yours for a while.</h3><p id="confirmed-book"></p><p>Return by <strong id="due-date" data-testid="checkout-due-date"></strong></p><p class="hint">Checkout reference</p><p id="reference" class="reference" data-testid="checkout-reference"></p><button id="new-checkout" class="secondary" type="button" data-testid="checkout-new-button">Browse another book</button></section>
+      </aside>
     </div>
-
-    <script src="app.js"></script>
+  </main>
+  <footer><span>Homenub Library</span><p>Stories bring us together.</p><small>Name and email are self-reported. Keep your checkout reference.</small></footer>
 </body>
 </html>

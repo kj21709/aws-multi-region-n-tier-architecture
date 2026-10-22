@@ -1,6 +1,6 @@
 {
-  "stage" : "units-generation",
-  "upstream_ids" : [
+  "stage": "units-generation",
+  "upstream_ids": [
     "FR1",
     "FR2",
     "FR3",
@@ -89,3 +89,4 @@
     }
   ]
 }
+

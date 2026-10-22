@@ -1,123 +1,837 @@
-AWSTemplateFormatVersion: '2010-09-09'
-Description: Master Stack - VPC + RDS/Secrets (Primary) + optional Replica (Secondary) + Lambda + HTTP API + S3/CloudFront + S3 Replication
-
-Parameters:
-  ProjectName:
-    Type: String
-    Default: visitor-app
-
-  Environment:
-    Type: String
-    Default: dev
-
-  DRMode:
-    Type: String
-    Default: primary
-    AllowedValues: [primary, secondary]
-
-  PrimaryDbArn:
-    Type: String
-    Default: ""
-
-  ReplicaRegion:
-    Type: String
-    Default: eu-west-2
-
-  ReplicationDestinationBucketArn:
-    Type: String
-    Default: ""
-
-  ReplicationSourceRoleArn:
-    Type: String
-    Default: ""
-
-Conditions:
-  IsPrimary: !Equals [!Ref DRMode, primary]
-  HasPrimaryDbArn: !Not [!Equals [!Ref PrimaryDbArn, ""]]
-  CreateReplica: !And
-    - !Equals [!Ref DRMode, secondary]
-    - !Condition HasPrimaryDbArn
-
-  HasDbEndpoint: !Or [!Condition IsPrimary, !Condition CreateReplica]
-
-Resources:
-  VPC:
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/vpc-stack.yml
-
-  Database:
-    Type: AWS::CloudFormation::Stack
-    DependsOn: VPC
-    Properties:
-      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/rds+SCM.yml
-      Parameters:
-        ProjectName: !Ref ProjectName
-        Environment: !Ref Environment
-        DRMode: !Ref DRMode
-        PrimaryDbArn: !Ref PrimaryDbArn
-        SecretName: !Sub "${ProjectName}-${Environment}-mysql-credentials"
-        ReplicaRegion: !Ref ReplicaRegion
-
-  LambdaBackend:
-    Type: AWS::CloudFormation::Stack
-    Condition: HasDbEndpoint
-    DependsOn: Database
-    Properties:
-      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/visitor-insert-lambda.yml
-      Parameters:
-        LambdaFunctionName: !Sub "${ProjectName}-${Environment}-visitor-lambda"
-        RDSStackName: !GetAtt Database.Outputs.StackName
-        DBSecretName: !Sub "${ProjectName}-${Environment}-mysql-credentials"
-
-  ApiGateway:
-    Type: AWS::CloudFormation::Stack
-    Condition: HasDbEndpoint
-    DependsOn: LambdaBackend
-    Properties:
-      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/HTTP+API-v2-stack.yml
-      Parameters:
-        ProjectName: !Ref ProjectName
-        Environment: !Ref Environment
-        VisitorLambdaArn: !GetAtt LambdaBackend.Outputs.VisitorLambdaArn
-
-  StaticSite:
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      TemplateURL: https://my-cloudformation-s3-bucket-hadr-project-kjd.s3.amazonaws.com/s3+OAC+CF-stack.yml
-      Parameters:
-        ProjectName: !Ref ProjectName
-        Environment: !Ref Environment
-        DRMode: !Ref DRMode
-        ReplicationDestinationBucketArn: !Ref ReplicationDestinationBucketArn
-        ReplicationSourceRoleArn: !Ref ReplicationSourceRoleArn
-
-Outputs:
-  StackName:
-    Value: !Ref AWS::StackName
-
-  SiteBucketName:
-    Value: !GetAtt StaticSite.Outputs.BucketName
-
-  SiteBucketArn:
-    Value: !GetAtt StaticSite.Outputs.BucketArn
-
-  CloudFrontDomainName:
-    Condition: IsPrimary
-    Value: !GetAtt StaticSite.Outputs.CloudFrontDomainName
-
-  CloudFrontDistributionId:
-    Condition: IsPrimary
-    Value: !GetAtt StaticSite.Outputs.CloudFrontDistributionId
-
-  ReplicationRoleArn:
-    Condition: IsPrimary
-    Value: !GetAtt StaticSite.Outputs.ReplicationRoleArn
-
-  RegisterEndpoint:
-    Condition: HasDbEndpoint
-    Value: !GetAtt ApiGateway.Outputs.RegisterEndpoint
-
-  PrimaryDbArnOut:
-    Condition: IsPrimary
-    Value: !GetAtt Database.Outputs.PrimaryDbArn
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Master Stack - VPC + RDS/Secrets (Primary) + optional Replica (Secondary) + Lambda + HTTP API + S3/CloudFront + S3 Replication",
+  "Parameters": {
+    "ProjectName": {
+      "Type": "String",
+      "Default": "visitor-app"
+    },
+    "Environment": {
+      "Type": "String",
+      "Default": "dev"
+    },
+    "DRMode": {
+      "Type": "String",
+      "Default": "primary",
+      "AllowedValues": [
+        "primary",
+        "secondary"
+      ]
+    },
+    "PrimaryDbArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ReplicaRegion": {
+      "Type": "String",
+      "Default": "us-east-2",
+      "AllowedValues": [
+        "us-east-2"
+      ]
+    },
+    "ReplicationDestinationBucketArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ReplicationSourceRoleArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "NestedTemplateBaseUrl": {
+      "Type": "String",
+      "AllowedPattern": "https://[A-Za-z0-9.-]+/.+",
+      "Description": "Version-addressed prefix for this release local nested template artifacts."
+    },
+    "VpcCidr": {
+      "Type": "String",
+      "Default": "10.0.0.0/16"
+    },
+    "PublicSubnetCidr": {
+      "Type": "String",
+      "Default": "10.0.10.0/24"
+    },
+    "PrivateSubnet1Cidr": {
+      "Type": "String",
+      "Default": "10.0.1.0/24"
+    },
+    "PrivateSubnet2Cidr": {
+      "Type": "String",
+      "Default": "10.0.2.0/24"
+    },
+    "DBName": {
+      "Type": "String",
+      "Default": "rdslabdb"
+    },
+    "DBUser": {
+      "Type": "String",
+      "Default": "dbadmin"
+    },
+    "DBInstanceClass": {
+      "Type": "String",
+      "Default": "db.t3.micro"
+    },
+    "AllocatedStorage": {
+      "Type": "Number",
+      "Default": 20,
+      "MinValue": 20
+    },
+    "EngineVersion": {
+      "Type": "String",
+      "Default": "8.0",
+      "AllowedValues": [
+        "8.0"
+      ]
+    },
+    "DatabaseKmsKeyArn": {
+      "Type": "String",
+      "Description": "Regional KMS key authorized for encrypted database and cross-region replication.",
+      "AllowedPattern": "arn:aws:kms:us-east-[12]:[0-9]{12}:key/[0-9a-f-]{36}"
+    },
+    "CodeBucket": {
+      "Type": "String"
+    },
+    "CodeKey": {
+      "Type": "String"
+    },
+    "CodeObjectVersion": {
+      "Type": "String"
+    },
+    "DBServerUuid": {
+      "Type": "String"
+    },
+    "DatabaseResourceId": {
+      "Type": "String"
+    },
+    "WriterGeneration": {
+      "Type": "Number",
+      "MinValue": 1
+    },
+    "DatabaseCaPath": {
+      "Type": "String"
+    },
+    "DatabaseCaSha256": {
+      "Type": "String",
+      "AllowedPattern": "[0-9a-f]{64}"
+    },
+    "MysqlDependencyDigest": {
+      "Type": "String",
+      "AllowedPattern": "[0-9a-f]{64}"
+    },
+    "AuthorityAdapterModule": {
+      "Type": "String",
+      "AllowedPattern": "homenub_authority\\.[A-Za-z0-9_.]+"
+    },
+    "PublicSecretArn": {
+      "Type": "String"
+    },
+    "RecoverySecretArn": {
+      "Type": "String"
+    },
+    "ReconciliationSecretArn": {
+      "Type": "String"
+    },
+    "ImportSecretArn": {
+      "Type": "String"
+    },
+    "PublicKmsKeyArn": {
+      "Type": "String"
+    },
+    "RecoveryKmsKeyArn": {
+      "Type": "String"
+    },
+    "ReconciliationKmsKeyArn": {
+      "Type": "String"
+    },
+    "ImportKmsKeyArn": {
+      "Type": "String"
+    },
+    "RecoveryAuthorityPolicyArn": {
+      "Type": "String"
+    },
+    "ReconciliationAuthorityPolicyArn": {
+      "Type": "String"
+    },
+    "ImportAuthorityPolicyArn": {
+      "Type": "String"
+    },
+    "RecoveryExecutorPrincipalArn": {
+      "Type": "String"
+    },
+    "ReconciliationPrincipalArn": {
+      "Type": "String"
+    },
+    "ImportPrincipalArn": {
+      "Type": "String"
+    },
+    "PublicConcurrency": {
+      "Type": "Number",
+      "MinValue": 1
+    },
+    "PrivateConcurrency": {
+      "Type": "Number",
+      "MinValue": 1
+    },
+    "SqlSessionCap": {
+      "Type": "Number",
+      "MinValue": 1,
+      "Description": "Server-enforced actual account cap; readiness verifies all accounts and reserve independently."
+    },
+    "LogRetentionDays": {
+      "Type": "Number",
+      "AllowedValues": [
+        1,
+        3,
+        5,
+        7,
+        14,
+        30,
+        60,
+        90,
+        120,
+        150,
+        180,
+        365,
+        400,
+        545,
+        731,
+        1096,
+        1827,
+        2192,
+        2557,
+        2922,
+        3288,
+        3653
+      ]
+    },
+    "SetupSecretArn": {
+      "Type": "String"
+    },
+    "SetupConcurrency": {
+      "Type": "Number",
+      "MinValue": 1
+    },
+    "SetupKmsKeyArn": {
+      "Type": "String"
+    },
+    "SetupAuthorityPolicyArn": {
+      "Type": "String"
+    },
+    "SetupPrincipalArn": {
+      "Type": "String"
+    },
+    "SchemaRevision": {
+      "Type": "String"
+    },
+    "SchemaDefinitionDigest": {
+      "Type": "String",
+      "AllowedPattern": "[0-9a-f]{64}"
+    },
+    "InitializationMode": {
+      "Type": "String",
+      "AllowedValues": [
+        "INITIAL_PRIMARY",
+        "ACTIVE_WRITER"
+      ]
+    },
+    "ExpectedGeneration": {
+      "Type": "Number",
+      "MinValue": 0
+    },
+    "SetupContextJson": {
+      "Type": "String",
+      "Description": "C4 registered pre-request context JSON, or literal null for INITIAL_PRIMARY."
+    },
+    "BootstrapAuthorizationJson": {
+      "Type": "String",
+      "Description": "Independent C3 bootstrap evidence JSON, or literal null for ACTIVE_WRITER."
+    },
+    "SiteOrigin": {
+      "Type": "String",
+      "Default": "https://www.homenub.com",
+      "AllowedValues": [
+        "https://www.homenub.com"
+      ]
+    },
+    "RequestsPerSecond": {
+      "Type": "Number",
+      "MinValue": 1
+    },
+    "BurstRequests": {
+      "Type": "Number",
+      "MinValue": 1
+    },
+    "SecondaryBucketRegionalDomainName": {
+      "Type": "String",
+      "Description": "Existing Ohio site bucket regional endpoint, required in primary.",
+      "Default": ""
+    },
+    "PrimaryDistributionArn": {
+      "Type": "String",
+      "Default": "",
+      "Description": "Bind Ohio OAC policy to the exact primary distribution after creation."
+    },
+    "SiteDomain": {
+      "Type": "String",
+      "Default": "www.homenub.com",
+      "AllowedValues": [
+        "www.homenub.com"
+      ]
+    },
+    "CloudFrontCertificateArn": {
+      "Type": "String",
+      "AllowedPattern": "arn:aws:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]{36}"
+    },
+    "CreateRoute53Records": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ]
+    },
+    "HostedZoneId": {
+      "Type": "String",
+      "Default": ""
+    },
+    "ApiDomain": {
+      "Type": "String",
+      "Default": "api.homenub.com",
+      "AllowedValues": [
+        "api.homenub.com"
+      ]
+    },
+    "RegionalCertificateArn": {
+      "Type": "String",
+      "AllowedPattern": "arn:aws:acm:us-east-[12]:[0-9]{12}:certificate/[0-9a-f-]{36}"
+    }
+  },
+  "Conditions": {
+    "IsPrimary": {
+      "Fn::Equals": [
+        {
+          "Ref": "DRMode"
+        },
+        "primary"
+      ]
+    },
+    "HasPrimaryDbArn": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "PrimaryDbArn"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "CreateReplica": {
+      "Fn::And": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "DRMode"
+            },
+            "secondary"
+          ]
+        },
+        {
+          "Condition": "HasPrimaryDbArn"
+        }
+      ]
+    },
+    "HasDbEndpoint": {
+      "Fn::Or": [
+        {
+          "Condition": "IsPrimary"
+        },
+        {
+          "Condition": "CreateReplica"
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "VPC": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": {
+          "Fn::Sub": "${NestedTemplateBaseUrl}/vpc-stack.yml"
+        },
+        "Parameters": {
+          "VpcCidr": {
+            "Ref": "VpcCidr"
+          },
+          "PublicSubnetCidr": {
+            "Ref": "PublicSubnetCidr"
+          },
+          "PrivateSubnet1Cidr": {
+            "Ref": "PrivateSubnet1Cidr"
+          },
+          "PrivateSubnet2Cidr": {
+            "Ref": "PrivateSubnet2Cidr"
+          }
+        }
+      }
+    },
+    "Database": {
+      "Type": "AWS::CloudFormation::Stack",
+      "DependsOn": "VPC",
+      "Properties": {
+        "TemplateURL": {
+          "Fn::Sub": "${NestedTemplateBaseUrl}/rds+SCM.yml"
+        },
+        "Parameters": {
+          "DBName": {
+            "Ref": "DBName"
+          },
+          "DBUser": {
+            "Ref": "DBUser"
+          },
+          "DBInstanceClass": {
+            "Ref": "DBInstanceClass"
+          },
+          "AllocatedStorage": {
+            "Ref": "AllocatedStorage"
+          },
+          "EngineVersion": {
+            "Ref": "EngineVersion"
+          },
+          "DatabaseKmsKeyArn": {
+            "Ref": "DatabaseKmsKeyArn"
+          },
+          "ProjectName": {
+            "Ref": "ProjectName"
+          },
+          "Environment": {
+            "Ref": "Environment"
+          },
+          "DRMode": {
+            "Ref": "DRMode"
+          },
+          "PrimaryDbArn": {
+            "Ref": "PrimaryDbArn"
+          },
+          "SecretName": {
+            "Fn::Sub": "${ProjectName}-${Environment}-mysql-credentials"
+          },
+          "ReplicaRegion": {
+            "Ref": "ReplicaRegion"
+          }
+        }
+      }
+    },
+    "LambdaBackend": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Condition": "HasDbEndpoint",
+      "DependsOn": "Initializer",
+      "Properties": {
+        "TemplateURL": {
+          "Fn::Sub": "${NestedTemplateBaseUrl}/visitor-insert-lambda.yml"
+        },
+        "Parameters": {
+          "LambdaFunctionName": {
+            "Fn::Sub": "${ProjectName}-${Environment}-visitor-lambda"
+          },
+          "RDSStackName": {
+            "Fn::GetAtt": [
+              "Database",
+              "Outputs.StackName"
+            ]
+          },
+          "DBSecretName": {
+            "Fn::Sub": "${ProjectName}-${Environment}-mysql-credentials"
+          },
+          "CodeBucket": {
+            "Ref": "CodeBucket"
+          },
+          "CodeKey": {
+            "Ref": "CodeKey"
+          },
+          "CodeObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          },
+          "DBServerUuid": {
+            "Ref": "DBServerUuid"
+          },
+          "DatabaseResourceId": {
+            "Ref": "DatabaseResourceId"
+          },
+          "WriterGeneration": {
+            "Ref": "WriterGeneration"
+          },
+          "DatabaseCaPath": {
+            "Ref": "DatabaseCaPath"
+          },
+          "DatabaseCaSha256": {
+            "Ref": "DatabaseCaSha256"
+          },
+          "MysqlDependencyDigest": {
+            "Ref": "MysqlDependencyDigest"
+          },
+          "AuthorityAdapterModule": {
+            "Ref": "AuthorityAdapterModule"
+          },
+          "PublicSecretArn": {
+            "Ref": "PublicSecretArn"
+          },
+          "RecoverySecretArn": {
+            "Ref": "RecoverySecretArn"
+          },
+          "ReconciliationSecretArn": {
+            "Ref": "ReconciliationSecretArn"
+          },
+          "ImportSecretArn": {
+            "Ref": "ImportSecretArn"
+          },
+          "PublicKmsKeyArn": {
+            "Ref": "PublicKmsKeyArn"
+          },
+          "RecoveryKmsKeyArn": {
+            "Ref": "RecoveryKmsKeyArn"
+          },
+          "ReconciliationKmsKeyArn": {
+            "Ref": "ReconciliationKmsKeyArn"
+          },
+          "ImportKmsKeyArn": {
+            "Ref": "ImportKmsKeyArn"
+          },
+          "RecoveryAuthorityPolicyArn": {
+            "Ref": "RecoveryAuthorityPolicyArn"
+          },
+          "ReconciliationAuthorityPolicyArn": {
+            "Ref": "ReconciliationAuthorityPolicyArn"
+          },
+          "ImportAuthorityPolicyArn": {
+            "Ref": "ImportAuthorityPolicyArn"
+          },
+          "RecoveryExecutorPrincipalArn": {
+            "Ref": "RecoveryExecutorPrincipalArn"
+          },
+          "ReconciliationPrincipalArn": {
+            "Ref": "ReconciliationPrincipalArn"
+          },
+          "ImportPrincipalArn": {
+            "Ref": "ImportPrincipalArn"
+          },
+          "PublicConcurrency": {
+            "Ref": "PublicConcurrency"
+          },
+          "PrivateConcurrency": {
+            "Ref": "PrivateConcurrency"
+          },
+          "SqlSessionCap": {
+            "Ref": "SqlSessionCap"
+          },
+          "LogRetentionDays": {
+            "Ref": "LogRetentionDays"
+          }
+        }
+      }
+    },
+    "ApiGateway": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Condition": "HasDbEndpoint",
+      "DependsOn": "LambdaBackend",
+      "Properties": {
+        "TemplateURL": {
+          "Fn::Sub": "${NestedTemplateBaseUrl}/HTTP+API-v2-stack.yml"
+        },
+        "Parameters": {
+          "ProjectName": {
+            "Ref": "ProjectName"
+          },
+          "Environment": {
+            "Ref": "Environment"
+          },
+          "VisitorLambdaArn": {
+            "Fn::GetAtt": [
+              "LambdaBackend",
+              "Outputs.VisitorLambdaArn"
+            ]
+          },
+          "SiteOrigin": {
+            "Ref": "SiteOrigin"
+          },
+          "LogRetentionDays": {
+            "Ref": "LogRetentionDays"
+          },
+          "RequestsPerSecond": {
+            "Ref": "RequestsPerSecond"
+          },
+          "BurstRequests": {
+            "Ref": "BurstRequests"
+          }
+        }
+      }
+    },
+    "StaticSite": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": {
+          "Fn::Sub": "${NestedTemplateBaseUrl}/s3+OAC+CF-stack.yml"
+        },
+        "Parameters": {
+          "ProjectName": {
+            "Ref": "ProjectName"
+          },
+          "Environment": {
+            "Ref": "Environment"
+          },
+          "DRMode": {
+            "Ref": "DRMode"
+          },
+          "ReplicationDestinationBucketArn": {
+            "Ref": "ReplicationDestinationBucketArn"
+          },
+          "ReplicationSourceRoleArn": {
+            "Ref": "ReplicationSourceRoleArn"
+          },
+          "SecondaryBucketRegionalDomainName": {
+            "Ref": "SecondaryBucketRegionalDomainName"
+          },
+          "PrimaryDistributionArn": {
+            "Ref": "PrimaryDistributionArn"
+          },
+          "SiteDomain": {
+            "Ref": "SiteDomain"
+          },
+          "CloudFrontCertificateArn": {
+            "Ref": "CloudFrontCertificateArn"
+          },
+          "CreateRoute53Records": {
+            "Ref": "CreateRoute53Records"
+          },
+          "HostedZoneId": {
+            "Ref": "HostedZoneId"
+          }
+        }
+      }
+    },
+    "Initializer": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": {
+          "Fn::Sub": "${NestedTemplateBaseUrl}/DBinit-lambda.yaml"
+        },
+        "Parameters": {
+          "LambdaFunctionName": {
+            "Fn::Sub": "${ProjectName}-${Environment}-dbinit-lambda"
+          },
+          "RDSStackName": {
+            "Fn::GetAtt": [
+              "Database",
+              "Outputs.StackName"
+            ]
+          },
+          "DBSecretName": {
+            "Fn::Sub": "${ProjectName}-${Environment}-mysql-credentials"
+          },
+          "CodeBucket": {
+            "Ref": "CodeBucket"
+          },
+          "CodeKey": {
+            "Ref": "CodeKey"
+          },
+          "CodeObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          },
+          "DBServerUuid": {
+            "Ref": "DBServerUuid"
+          },
+          "DatabaseResourceId": {
+            "Ref": "DatabaseResourceId"
+          },
+          "WriterGeneration": {
+            "Ref": "WriterGeneration"
+          },
+          "DatabaseCaPath": {
+            "Ref": "DatabaseCaPath"
+          },
+          "DatabaseCaSha256": {
+            "Ref": "DatabaseCaSha256"
+          },
+          "MysqlDependencyDigest": {
+            "Ref": "MysqlDependencyDigest"
+          },
+          "AuthorityAdapterModule": {
+            "Ref": "AuthorityAdapterModule"
+          },
+          "SetupSecretArn": {
+            "Ref": "SetupSecretArn"
+          },
+          "SetupConcurrency": {
+            "Ref": "SetupConcurrency"
+          },
+          "SqlSessionCap": {
+            "Ref": "SqlSessionCap"
+          },
+          "LogRetentionDays": {
+            "Ref": "LogRetentionDays"
+          },
+          "SetupKmsKeyArn": {
+            "Ref": "SetupKmsKeyArn"
+          },
+          "SetupAuthorityPolicyArn": {
+            "Ref": "SetupAuthorityPolicyArn"
+          },
+          "SetupPrincipalArn": {
+            "Ref": "SetupPrincipalArn"
+          },
+          "SchemaRevision": {
+            "Ref": "SchemaRevision"
+          },
+          "SchemaDefinitionDigest": {
+            "Ref": "SchemaDefinitionDigest"
+          },
+          "InitializationMode": {
+            "Ref": "InitializationMode"
+          },
+          "ExpectedGeneration": {
+            "Ref": "ExpectedGeneration"
+          },
+          "SetupContextJson": {
+            "Ref": "SetupContextJson"
+          },
+          "BootstrapAuthorizationJson": {
+            "Ref": "BootstrapAuthorizationJson"
+          }
+        }
+      },
+      "Condition": "HasDbEndpoint",
+      "DependsOn": "Database"
+    },
+    "RegionalApiDomain": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Properties": {
+        "TemplateURL": {
+          "Fn::Sub": "${NestedTemplateBaseUrl}/regional-api-domain.yml"
+        },
+        "Parameters": {
+          "ApiId": {
+            "Fn::GetAtt": [
+              "ApiGateway",
+              "Outputs.ApiId"
+            ]
+          },
+          "ApiStageName": {
+            "Fn::GetAtt": [
+              "ApiGateway",
+              "Outputs.ApiStageName"
+            ]
+          },
+          "ApiDomain": {
+            "Ref": "ApiDomain"
+          },
+          "RegionalCertificateArn": {
+            "Ref": "RegionalCertificateArn"
+          }
+        }
+      },
+      "Condition": "HasDbEndpoint",
+      "DependsOn": "ApiGateway"
+    }
+  },
+  "Outputs": {
+    "StackName": {
+      "Value": {
+        "Ref": "AWS::StackName"
+      }
+    },
+    "SiteBucketName": {
+      "Value": {
+        "Fn::GetAtt": [
+          "StaticSite",
+          "Outputs.BucketName"
+        ]
+      }
+    },
+    "SiteBucketArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "StaticSite",
+          "Outputs.BucketArn"
+        ]
+      }
+    },
+    "CloudFrontDomainName": {
+      "Condition": "IsPrimary",
+      "Value": {
+        "Fn::GetAtt": [
+          "StaticSite",
+          "Outputs.CloudFrontDomainName"
+        ]
+      }
+    },
+    "CloudFrontDistributionId": {
+      "Condition": "IsPrimary",
+      "Value": {
+        "Fn::GetAtt": [
+          "StaticSite",
+          "Outputs.CloudFrontDistributionId"
+        ]
+      }
+    },
+    "ReplicationRoleArn": {
+      "Condition": "IsPrimary",
+      "Value": {
+        "Fn::GetAtt": [
+          "StaticSite",
+          "Outputs.ReplicationRoleArn"
+        ]
+      }
+    },
+    "PrimaryDbArnOut": {
+      "Condition": "IsPrimary",
+      "Value": {
+        "Fn::GetAtt": [
+          "Database",
+          "Outputs.PrimaryDbArn"
+        ]
+      }
+    },
+    "ApiId": {
+      "Condition": "HasDbEndpoint",
+      "Value": {
+        "Fn::GetAtt": [
+          "ApiGateway",
+          "Outputs.ApiId"
+        ]
+      }
+    },
+    "ApiStageName": {
+      "Condition": "HasDbEndpoint",
+      "Value": {
+        "Fn::GetAtt": [
+          "ApiGateway",
+          "Outputs.ApiStageName"
+        ]
+      }
+    },
+    "ApiBaseUrl": {
+      "Condition": "HasDbEndpoint",
+      "Value": {
+        "Fn::GetAtt": [
+          "ApiGateway",
+          "Outputs.ApiBaseUrl"
+        ]
+      }
+    },
+    "RegionalApiDomainTarget": {
+      "Condition": "HasDbEndpoint",
+      "Value": {
+        "Fn::GetAtt": [
+          "RegionalApiDomain",
+          "Outputs.RegionalApiDomainTarget"
+        ]
+      }
+    },
+    "StableApiBaseUrl": {
+      "Value": "https://api.homenub.com"
+    },
+    "SiteUrl": {
+      "Value": "https://www.homenub.com"
+    }
+  }
+}

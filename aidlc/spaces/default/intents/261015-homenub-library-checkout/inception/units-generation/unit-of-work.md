@@ -1,9 +1,8 @@
 # Homenub Library — Units of Work
 
-
 ## Sources
 
-This decomposition implements the approved [unit proposal](units-generation-questions.md) and [plan approval](decomposition-plan-questions.md), constrained by the [component catalogue](../domain-design/components.md), [domain ADRs](../domain-design/decisions.md) and [requirements](../requirements-analysis/requirements.md). The composed workflow produced no user-story artifact; FR1–FR14 are the coverage inputs. All work prepares local code, configuration and validation. No AWS access, deployment, DNS edits or spending is authorized.
+This decomposition implements the approved [unit proposal](units-generation-questions.md) and [plan approval](decomposition-plan-approval.md), constrained by the [component catalogue](../domain-design/components.md), [domain ADRs](../domain-design/decisions.md) and [requirements](../requirements-analysis/requirements.md). The composed workflow produced no user-story artifact; FR1–FR14 are the coverage inputs. All work prepares local code, configuration and validation. No AWS access, deployment, DNS edits or spending is authorized.
 
 ## Unit Definitions
 
@@ -119,3 +118,4 @@ Contract Design must pin public wire/error semantics, private authorization and 
 No unresolved business choice is needed for this decomposition. All domain/requirements decisions carry forward. Concrete fencing and acknowledged-history proof remain mandatory design/test obligations before automatic promotion can be accepted. If they cannot satisfy the retained architecture and selected objectives, present the explicit tradeoff rather than reduce safety or claim success.
 
 Before launch, require catalog approval, retention/deletion policy, operating/alert ownership, domain/certificate/hosted-zone inputs, driver availability, two-region pricing and authorized recovery evidence. The user confirms no live environment; Ohio replaces active London references directly. Historical assessment/audit records may preserve prior references as provenance.
+

@@ -4,7 +4,7 @@
 
 Use the approved [component catalogue](../domain-design/components.md), [ADRs](../domain-design/decisions.md), [requirements](../requirements-analysis/requirements.md) and confirmed questions in [Domain Design](../domain-design/domain-design-questions.md), [Requirements Analysis](../requirements-analysis/requirements-analysis-questions.md) and [Refined Mockups](../refined-mockups/refined-mockups-questions.md). Their choices are carried forward, not reopened. No stories artifact was produced by this composed workflow; map FR1–FR14 directly. Delivery Planning is outside the approved composed scope; this stage supplies dependency topology, not economic priority or a Bolt delivery sequence.
 
-No new business input is needed to propose the grouping. The implementation granularity below is a technical proposal for confirmation, followed by this stage's separate Approve Plan / Revise Plan checkpoint. Detailed contracts and final schema/fencing mechanisms remain later design work. No application source, AWS resource or DNS change occurs in this stage.
+No new business input is needed. The implementation granularity below is the same plan the user approved. The prior separate approval record is preserved in [decomposition-plan-approval.md](decomposition-plan-approval.md), and its answer is carried forward below. This restarted stage uses this one active questions file and a fresh summary confirmation. Detailed contracts and final schema/fencing mechanisms remain later design work. No application source, AWS resource or DNS change occurs in this stage.
 
 ## Decomposition Proposal and Alternatives
 
@@ -37,6 +37,20 @@ U2 is the separately privileged recovery execution/control unit, using U1's cont
 - **U1:** App source; checkout/API/initializer executable code and their direct API/initializer templates; local integrated startup and borrower/schema/transaction tests. Connection/writer-admission and quarantine behavior stay here. It does not own the release pipeline or regional promotion logic.
 - **U2:** recovery executable/state-machine/adapters; regional control and runtime infrastructure templates, including parent stack wiring, RDS/replication and static/API domain recovery configuration; recovery, restore and partition/fault test assets. It consumes U1's declared template outputs and never changes the initializer's internal schema logic. Detailed Infrastructure Design will pin exact paths before code work; preserve VPC layout, sizing and stack names.
 - **U3:** buildspecs, packaging/configuration/region-validation helpers, generated-artifact rules, CI integration and active setup/cost/evidence documentation. It consumes the source templates owned by U1/U2 rather than assigning a second owner. U1's local test helper and U2's recovery tests remain executable inputs to the integrated checks. U3 validates Ohio defaults/overrides/outputs across the whole package; owners of source files make any required default edits in their own units.
+
+## Plan Approval — Previously Answered
+
+Approve this three-unit decomposition and the proposed kinds before generating the four unit artifacts? This was already answered by the user with "Approve plan"; it is carried forward, not selected by the assistant or asked again.
+
+A. Approve Plan
+B. Revise Plan
+X. Other (please specify)
+
+[Answer]: A. Approve Plan
+
+## Restart Input
+
+Exact user request: "Reopen Units Generation and regenerate the same approved plan". The three unit boundaries, kinds, complexity and dependency edges are unchanged. The earlier duplicate plan record is retained for provenance; this file is the sole active questions file for fresh confirmation.
 
 ## Ambiguity Analysis
 

@@ -1,9 +1,8 @@
 # Homenub Library — Unit Dependencies
 
-
 ## Sources
 
-The approved [plan](decomposition-plan-questions.md), [unit definitions](unit-of-work.md), [domain components](../domain-design/components.md) and [requirements](../requirements-analysis/requirements.md) define this dependency topology. No economic build order, critical path or Bolt sequence is selected here.
+The approved [plan](decomposition-plan-approval.md), [unit definitions](unit-of-work.md), [domain components](../domain-design/components.md) and [requirements](../requirements-analysis/requirements.md) define this dependency topology. No economic build order, critical path or Bolt sequence is selected here.
 
 ## Dependency DAG
 
@@ -71,3 +70,4 @@ This records dependency constraints only. It does not recommend economic priorit
 ## Validation
 
 Check declared unit-name grammar, unique membership, allowed kinds, resolved non-self dependencies and acyclicity. Compare diagram and prose edges with the YAML; compare all Unit IDs/directories with the unit definitions and requirement map. These are local document checks, not deployment, performance or failover evidence.
+

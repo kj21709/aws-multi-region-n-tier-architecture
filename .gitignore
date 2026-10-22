@@ -13,6 +13,13 @@ dist
 dist-ssr
 *.local
 
+# word files
+*.doc
+*.docx
+
+*buildspec/HowtoCreateMainStackFromCLI.md
+
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -86,4 +93,8 @@ aidlc/diagnostics/
 #
 #
 #Remove the following files from the repository
-
+.local/
+__pycache__/
+*.py[cod]
+tests/u1/browser/test-results/
+tests/u1/browser/playwright-report/

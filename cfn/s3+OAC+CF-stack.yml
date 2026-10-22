@@ -25,9 +25,45 @@ Parameters:
     Type: String
     Default: ""
 
+  SecondaryBucketRegionalDomainName:
+    Type: String
+    Description: Existing Ohio site bucket regional endpoint, required in primary.
+    Default: ''
+  PrimaryDistributionArn:
+    Type: String
+    Default: ''
+    Description: Bind Ohio OAC policy to the exact primary distribution after creation.
+  SiteDomain:
+    Type: String
+    Default: www.homenub.com
+    AllowedValues: [www.homenub.com]
+  CloudFrontCertificateArn:
+    Type: String
+    AllowedPattern: 'arn:aws:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]{36}'
+  CreateRoute53Records:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+  HostedZoneId:
+    Type: String
+    Default: ''
+Rules:
+  RequirePrimaryOrigin:
+    RuleCondition: !Equals [!Ref DRMode, primary]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref SecondaryBucketRegionalDomainName, '']]
+        AssertDescription: Primary requires an explicitly provisioned Ohio origin.
+  RequireExistingZone:
+    RuleCondition: !Equals [!Ref CreateRoute53Records, 'true']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref HostedZoneId, '']]
+        AssertDescription: Supply the existing hosted zone for optional records.
+
 Conditions:
   IsPrimary: !Equals [!Ref DRMode, primary]
   IsSecondary: !Equals [!Ref DRMode, secondary]
+  HasPrimaryDistribution: !Not [!Equals [!Ref PrimaryDistributionArn, '']]
+  CreateSiteRecord: !And [!Condition IsPrimary, !Equals [!Ref CreateRoute53Records, 'true']]
 
   HasDestArnValue: !Not [!Equals [!Ref ReplicationDestinationBucketArn, ""]]
   HasSourceRoleValue: !Not [!Equals [!Ref ReplicationSourceRoleArn, ""]]
@@ -41,7 +77,12 @@ Conditions:
 Resources:
   SiteBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
       VersioningConfiguration:
         Status: Enabled
 
@@ -127,25 +168,38 @@ Resources:
   # SECONDARY update step: allow PRIMARY replication role to write into the SECONDARY bucket
   AllowReplicationFromPrimaryRole:
     Type: AWS::S3::BucketPolicy
-    Condition: HasReplicationSourceRole
+    Condition: IsSecondary
     Properties:
       Bucket: !Ref SiteBucket
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Sid: AllowReplicationWrites
-            Effect: Allow
-            Principal:
-              AWS: !Ref ReplicationSourceRoleArn
-            Action:
-              - s3:ReplicateObject
-              - s3:ReplicateDelete
-              - s3:ReplicateTags
-              - s3:ObjectOwnerOverrideToBucketOwner
-              - s3:PutObject
-              - s3:PutObjectAcl
-              - s3:PutObjectTagging
-            Resource: !Sub "${SiteBucket.Arn}/*"
+          - !If
+            - HasReplicationSourceRole
+            - Sid: AllowReplicationWrites
+              Effect: Allow
+              Principal: {AWS: !Ref ReplicationSourceRoleArn}
+              Action: ['s3:ReplicateObject', 's3:ReplicateDelete', 's3:ReplicateTags', 's3:ObjectOwnerOverrideToBucketOwner']
+              Resource: !Sub '${SiteBucket.Arn}/*'
+            - !Ref AWS::NoValue
+          - !If
+            - HasPrimaryDistribution
+            - Sid: AllowExactCloudFrontRead
+              Effect: Allow
+              Principal: {Service: cloudfront.amazonaws.com}
+              Action: s3:GetObject
+              Resource: !Sub '${SiteBucket.Arn}/*'
+              Condition:
+                StringEquals:
+                  AWS:SourceAccount: !Ref AWS::AccountId
+                  AWS:SourceArn: !Ref PrimaryDistributionArn
+            - !Ref AWS::NoValue
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt SiteBucket.Arn, !Sub '${SiteBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
 
   # CloudFront only in PRIMARY
   OriginAccessControl:
@@ -167,15 +221,33 @@ Resources:
         DefaultRootObject: index.html
         HttpVersion: http2
         PriceClass: PriceClass_100
+        Aliases: [!Ref SiteDomain]
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CloudFrontCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
 
         Origins:
           - Id: S3Origin
             DomainName: !GetAtt SiteBucket.RegionalDomainName
             S3OriginConfig: {}
             OriginAccessControlId: !Ref OriginAccessControl
+          - Id: OhioS3Origin
+            DomainName: !Ref SecondaryBucketRegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref OriginAccessControl
+        OriginGroups:
+          Quantity: 1
+          Items:
+            - Id: StaticOriginFailover
+              FailoverCriteria:
+                StatusCodes: {Quantity: 4, Items: [500, 502, 503, 504]}
+              Members:
+                Quantity: 2
+                Items: [{OriginId: S3Origin}, {OriginId: OhioS3Origin}]
 
         DefaultCacheBehavior:
-          TargetOriginId: S3Origin
+          TargetOriginId: StaticOriginFailover
           ViewerProtocolPolicy: redirect-to-https
           AllowedMethods: [GET, HEAD, OPTIONS]
           CachedMethods: [GET, HEAD, OPTIONS]
@@ -194,6 +266,12 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt SiteBucket.Arn, !Sub '${SiteBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
           - Sid: AllowCloudFrontRead
             Effect: Allow
             Principal:
@@ -204,6 +282,18 @@ Resources:
               StringEquals:
                 AWS:SourceAccount: !Ref AWS::AccountId
                 AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  SiteAlias:
+    Type: AWS::Route53::RecordSet
+    Condition: CreateSiteRecord
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref SiteDomain
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
 
 Outputs:
   BucketName:

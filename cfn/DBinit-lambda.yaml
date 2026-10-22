@@ -1,18 +1,73 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: DB init Lambda (Create table in RDS on stack creation) 
-
+Description: Homenub additive schema initializer; versioned packaged Python3.12 code.
 Parameters:
   LambdaFunctionName:
     Type: String
     Default: DBInitLambda
-
   RDSStackName:
     Type: String
-
   DBSecretName:
     Type: String
-    Default: visitor-app-dev-mysql-credentials
-
+    Description: Retained input; exact public capability secret ARN is required below.
+  CodeBucket:
+    Type: String
+  CodeKey:
+    Type: String
+  CodeObjectVersion:
+    Type: String
+  DBServerUuid:
+    Type: String
+  DatabaseResourceId:
+    Type: String
+  WriterGeneration:
+    Type: Number
+    MinValue: 1
+  DatabaseCaPath:
+    Type: String
+  DatabaseCaSha256:
+    Type: String
+    AllowedPattern: '[0-9a-f]{64}'
+  MysqlDependencyDigest:
+    Type: String
+    AllowedPattern: '[0-9a-f]{64}'
+  AuthorityAdapterModule:
+    Type: String
+    AllowedPattern: 'homenub_authority\.[A-Za-z0-9_.]+'
+  SetupSecretArn:
+    Type: String
+  SetupConcurrency:
+    Type: Number
+    MinValue: 1
+  SqlSessionCap:
+    Type: Number
+    MinValue: 1
+    Description: Server-enforced actual account cap; readiness verifies all accounts and reserve independently.
+  LogRetentionDays:
+    Type: Number
+    AllowedValues: [1,3,5,7,14,30,60,90,120,150,180,365,400,545,731,1096,1827,2192,2557,2922,3288,3653]
+  SetupKmsKeyArn:
+    Type: String
+  SetupAuthorityPolicyArn:
+    Type: String
+  SetupPrincipalArn:
+    Type: String
+  SchemaRevision:
+    Type: String
+  SchemaDefinitionDigest:
+    Type: String
+    AllowedPattern: '[0-9a-f]{64}'
+  InitializationMode:
+    Type: String
+    AllowedValues: [INITIAL_PRIMARY,ACTIVE_WRITER]
+  ExpectedGeneration:
+    Type: Number
+    MinValue: 0
+  SetupContextJson:
+    Type: String
+    Description: C4 registered pre-request context JSON, or literal null for INITIAL_PRIMARY.
+  BootstrapAuthorizationJson:
+    Type: String
+    Description: Independent C3 bootstrap evidence JSON, or literal null for ACTIVE_WRITER.
 Resources:
   DBInitLambdaRole:
     Type: AWS::IAM::Role
@@ -22,123 +77,96 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
+            Principal: {Service: lambda.amazonaws.com}
             Action: sts:AssumeRole
-
+      # Lambda VPC ENI APIs require resource wildcard in AWS-managed service policy.
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole  
-
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+        - !Ref SetupAuthorityPolicyArn
       Policies:
-        - PolicyName: ReadDbSecret
+        - PolicyName: ScopedCapabilitySecretAndLogs
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${DBSecretName}-*"
-
+                Resource: !Ref SetupSecretArn
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref SetupKmsKeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.amazonaws.com' 
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt DBInitLambdaLogs.Arn
+  DBInitLambdaLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${LambdaFunctionName}'
+      RetentionInDays: !Ref LogRetentionDays
   DBInitLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Ref LambdaFunctionName
-      Handler: index.lambda_handler
+      FunctionName: !Sub '${LambdaFunctionName}'
       Runtime: python3.12
+      Architectures: [x86_64]
+      Handler: library_checkout.handlers.setup
       Role: !GetAtt DBInitLambdaRole.Arn
-      Timeout: 30
+      Timeout: 100
       MemorySize: 256
-
+      ReservedConcurrentExecutions: !Ref SetupConcurrency
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+        S3ObjectVersion: !Ref CodeObjectVersion
       Environment:
         Variables:
           DB_HOST:
-            Fn::ImportValue: !Sub "${RDSStackName}-RDSEndpoint"
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSEndpoint'
           DB_PORT:
-            Fn::ImportValue: !Sub "${RDSStackName}-RDSPort"
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSPort'
           DB_NAME:
-            Fn::ImportValue: !Sub "${RDSStackName}-DBName"
-          DB_SECRET_NAME: !Ref DBSecretName
-
-      Layers:
-        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-mysql-connector-python:9"
-
+            Fn::ImportValue: !Sub '${RDSStackName}-DBName'
+          DB_SECRET_ARN: !Ref SetupSecretArn
+          DB_SERVER_UUID: !Ref DBServerUuid
+          DB_RESOURCE_ID: !Ref DatabaseResourceId
+          DB_GENERATION: !Ref WriterGeneration
+          DB_CA_PATH: !Ref DatabaseCaPath
+          DB_CA_SHA256: !Ref DatabaseCaSha256
+          MYSQL_DEPENDENCY_DIGEST: !Ref MysqlDependencyDigest
+          HOMENUB_AUTHORITY_ADAPTER: !Ref AuthorityAdapterModule
+          SITE_ORIGIN: https://www.homenub.com
+          SQL_SESSION_CAP: !Ref SqlSessionCap
       VpcConfig:
-        SubnetIds:
-          - !ImportValue PrivateSubnet1Id
-          - !ImportValue PrivateSubnet2Id
+        SubnetIds: [!ImportValue PrivateSubnet1Id, !ImportValue PrivateSubnet2Id]
         SecurityGroupIds:
-          - Fn::ImportValue: !Sub "${RDSStackName}-LambdaSecurityGroupId"
-
-
-      Code:
-        ZipFile: |
-          import json
-          import boto3
-          import os
-          import urllib.request
-
-          def send_response(event, context, status, data):
-              response_body = json.dumps({
-                  'Status': status,
-                  'Reason': 'See CloudWatch Logs',
-                  'PhysicalResourceId': context.log_stream_name,
-                  'StackId': event['StackId'],
-                  'RequestId': event['RequestId'],
-                  'LogicalResourceId': event['LogicalResourceId'],
-                  'Data': data
-              })
-
-              req = urllib.request.Request(
-                  event['ResponseURL'],
-                  data=response_body.encode('utf-8'),
-                  method='PUT',
-                  headers={'Content-Type': ''}
-              )
-              urllib.request.urlopen(req)
-
-          def lambda_handler(event, context):
-              print("EVENT:", json.dumps(event))
-
-              if event['RequestType'] == 'Delete':
-                  send_response(event, context, "SUCCESS", {})
-                  return
-
-              try:
-                  import mysql.connector
-                  client = boto3.client('secretsmanager')
-                  res = client.get_secret_value(SecretId=os.environ['SECRET_ARN'])
-                  pw = json.loads(res['SecretString'])['password']
-
-                  conn = mysql.connector.connect(
-                      host=os.environ['DB_HOST'],
-                      user=os.environ['DB_USER'],
-                      password=pw,
-                      database=os.environ['DB_NAME'],
-                      connect_timeout=15
-                  )
-
-                  cur = conn.cursor()
-                  cur.execute("""
-                      CREATE TABLE IF NOT EXISTS VISITOR_LOG (
-                          ID INT AUTO_INCREMENT PRIMARY KEY,
-                          IP_ADDRESS VARCHAR(45),
-                          CITY_NAME VARCHAR(100),
-                          STATE VARCHAR(100),
-                          COUNTRY VARCHAR(100),
-                          CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                      );
-                  """)
-                  conn.commit()
-                  cur.close()
-                  conn.close()
-
-                  send_response(event, context, "SUCCESS", {"Message": "Table Created"})
-
-              except Exception as e:
-                  print("ERROR:", str(e))
-                  send_response(event, context, "FAILED", {"Error": str(e)})
-
+          - Fn::ImportValue: !Sub '${RDSStackName}-LambdaSecurityGroupId'
+  SetupInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DBInitLambda
+      Action: lambda:InvokeFunction
+      Principal: !Ref SetupPrincipalArn
   RunTableCreation:
     Type: Custom::TableInit
     Properties:
       ServiceToken: !GetAtt DBInitLambda.Arn
+      ServiceTimeout: 120
+      InitializationMode: !Ref InitializationMode
+      SchemaRevision: !Ref SchemaRevision
+      SchemaDefinitionDigest: !Ref SchemaDefinitionDigest
+      ExpectedGeneration: !Ref ExpectedGeneration
+      SetupContext: !Ref SetupContextJson
+      BootstrapAuthorization: !Ref BootstrapAuthorizationJson
+Outputs:
+  DbInitFunctionArn:
+    Value: !GetAtt DBInitLambda.Arn
+  SchemaRevision:
+    Value: !Ref SchemaRevision
+  SchemaDefinitionDigest:
+    Value: !Ref SchemaDefinitionDigest
+  SchemaReadiness:
+    Value: !GetAtt RunTableCreation.verified
+  WriterProtocolVersion:
+    Value: '1'

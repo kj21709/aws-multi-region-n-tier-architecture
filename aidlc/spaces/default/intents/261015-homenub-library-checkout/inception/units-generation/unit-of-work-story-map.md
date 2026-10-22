@@ -1,6 +1,5 @@
 # Homenub Library — Requirement-to-Unit Map
 
-
 ## Sources and Mapping Rules
 
 Use the approved [requirements](../requirements-analysis/requirements.md), [component ownership](../domain-design/components.md), [unit definitions](unit-of-work.md) and [dependency DAG](unit-of-work-dependency.md). User Stories was skipped in this composed workflow; no US identifiers are invented. This file uses stable FR1–FR14 in place of story IDs and records one primary accountable Unit ID/directory per row. Supporting work is explicit and does not imply multiple entity owners.
@@ -78,3 +77,4 @@ Shared FR/NFR verification is tracked as supporting work, not fictitious complet
 ## Assumptions & Open Questions
 
 No additional business choice is introduced. Downstream designs must pin the interfaces and proof obligations identified in unit-of-work.md before claiming their implementation can pass. Launch inputs and future authorized cloud evidence remain outstanding exactly as recorded in requirements; this mapping does not authorize AWS access or revive London migration tasks.
+

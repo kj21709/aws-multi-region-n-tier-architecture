@@ -1,214 +1,404 @@
-AWSTemplateFormatVersion: "2010-09-09"
-Description: Visitor API Lambda (GET + POST) -> MySQL RDS using Secrets Manager
-
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Homenub U1 circulation functions; versioned packaged Python3.12 code.
 Parameters:
   LambdaFunctionName:
     Type: String
     Default: visitor-insert-lambda
-
   RDSStackName:
     Type: String
-
   DBSecretName:
     Type: String
-    Default: visitor-app-dev-mysql-credentials
-
+    Description: Retained input; exact public capability secret ARN is required below.
+  CodeBucket:
+    Type: String
+  CodeKey:
+    Type: String
+  CodeObjectVersion:
+    Type: String
+  DBServerUuid:
+    Type: String
+  DatabaseResourceId:
+    Type: String
+  WriterGeneration:
+    Type: Number
+    MinValue: 1
+  DatabaseCaPath:
+    Type: String
+  DatabaseCaSha256:
+    Type: String
+    AllowedPattern: '[0-9a-f]{64}'
+  MysqlDependencyDigest:
+    Type: String
+    AllowedPattern: '[0-9a-f]{64}'
+  AuthorityAdapterModule:
+    Type: String
+    AllowedPattern: 'homenub_authority\.[A-Za-z0-9_.]+'
+  PublicSecretArn:
+    Type: String
+  RecoverySecretArn:
+    Type: String
+  ReconciliationSecretArn:
+    Type: String
+  ImportSecretArn:
+    Type: String
+  PublicKmsKeyArn:
+    Type: String
+  RecoveryKmsKeyArn:
+    Type: String
+  ReconciliationKmsKeyArn:
+    Type: String
+  ImportKmsKeyArn:
+    Type: String
+  RecoveryAuthorityPolicyArn:
+    Type: String
+  ReconciliationAuthorityPolicyArn:
+    Type: String
+  ImportAuthorityPolicyArn:
+    Type: String
+  RecoveryExecutorPrincipalArn:
+    Type: String
+  ReconciliationPrincipalArn:
+    Type: String
+  ImportPrincipalArn:
+    Type: String
+  PublicConcurrency:
+    Type: Number
+    MinValue: 1
+  PrivateConcurrency:
+    Type: Number
+    MinValue: 1
+  SqlSessionCap:
+    Type: Number
+    MinValue: 1
+    Description: Server-enforced actual account cap; readiness verifies all accounts and reserve independently.
+  LogRetentionDays:
+    Type: Number
+    AllowedValues: [1,3,5,7,14,30,60,90,120,150,180,365,400,545,731,1096,1827,2192,2557,2922,3288,3653]
 Resources:
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub "${LambdaFunctionName}-role-${AWS::Region}"
       AssumeRolePolicyDocument:
-        Version: "2012-10-17"
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: "sts:AssumeRole"
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      # Lambda VPC ENI APIs require resource wildcard in AWS-managed service policy.
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
       Policies:
-        - PolicyName: ReadDbSecret
+        - PolicyName: ScopedCapabilitySecretAndLogs
           PolicyDocument:
-            Version: "2012-10-17"
+            Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${DBSecretName}-*"
-
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref PublicSecretArn
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref PublicKmsKeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.amazonaws.com' 
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt VisitorInsertLambdaLogs.Arn
+  VisitorInsertLambdaLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${LambdaFunctionName}'
+      RetentionInDays: !Ref LogRetentionDays
   VisitorInsertLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Ref LambdaFunctionName
+      FunctionName: !Sub '${LambdaFunctionName}'
       Runtime: python3.12
-      Handler: index.lambda_handler
+      Architectures: [x86_64]
+      Handler: library_checkout.handlers.public
       Role: !GetAtt LambdaExecutionRole.Arn
-      Timeout: 30
+      Timeout: 10
       MemorySize: 256
-
+      ReservedConcurrentExecutions: !Ref PublicConcurrency
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+        S3ObjectVersion: !Ref CodeObjectVersion
       Environment:
         Variables:
           DB_HOST:
-            Fn::ImportValue: !Sub "${RDSStackName}-RDSEndpoint"
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSEndpoint'
           DB_PORT:
-            Fn::ImportValue: !Sub "${RDSStackName}-RDSPort"
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSPort'
           DB_NAME:
-            Fn::ImportValue: !Sub "${RDSStackName}-DBName"
-          DB_SECRET_NAME: !Ref DBSecretName
-
-      Layers:
-        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-mysql-connector-python:9"
-
+            Fn::ImportValue: !Sub '${RDSStackName}-DBName'
+          DB_SECRET_ARN: !Ref PublicSecretArn
+          DB_SERVER_UUID: !Ref DBServerUuid
+          DB_RESOURCE_ID: !Ref DatabaseResourceId
+          DB_GENERATION: !Ref WriterGeneration
+          DB_CA_PATH: !Ref DatabaseCaPath
+          DB_CA_SHA256: !Ref DatabaseCaSha256
+          MYSQL_DEPENDENCY_DIGEST: !Ref MysqlDependencyDigest
+          HOMENUB_AUTHORITY_ADAPTER: !Ref AuthorityAdapterModule
+          SITE_ORIGIN: https://www.homenub.com
+          SQL_SESSION_CAP: !Ref SqlSessionCap
       VpcConfig:
-        SubnetIds:
-          - !ImportValue PrivateSubnet1Id
-          - !ImportValue PrivateSubnet2Id
+        SubnetIds: [!ImportValue PrivateSubnet1Id, !ImportValue PrivateSubnet2Id]
         SecurityGroupIds:
-          - Fn::ImportValue: !Sub "${RDSStackName}-LambdaSecurityGroupId"
-
+          - Fn::ImportValue: !Sub '${RDSStackName}-LambdaSecurityGroupId'
+  RecoveryExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      # Lambda VPC ENI APIs require resource wildcard in AWS-managed service policy.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+        - !Ref RecoveryAuthorityPolicyArn
+      Policies:
+        - PolicyName: ScopedCapabilitySecretAndLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref RecoverySecretArn
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref RecoveryKmsKeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.amazonaws.com' 
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt LibraryOperationsFunctionLogs.Arn
+  LibraryOperationsFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${LambdaFunctionName}-recovery'
+      RetentionInDays: !Ref LogRetentionDays
+  LibraryOperationsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${LambdaFunctionName}-recovery'
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Handler: library_checkout.handlers.recovery
+      Role: !GetAtt RecoveryExecutionRole.Arn
+      Timeout: 35
+      MemorySize: 256
+      ReservedConcurrentExecutions: !Ref PrivateConcurrency
       Code:
-        ZipFile: |
-          import os, json, base64
-          import boto3
-          import mysql.connector
-
-          sm = boto3.client("secretsmanager")
-
-          def _resp(code, body):
-              return {
-                  "statusCode": code,
-                  "headers": {
-                      "Content-Type": "application/json",
-                      "Access-Control-Allow-Origin": "*",
-                      "Access-Control-Allow-Headers": "Content-Type",
-                      "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
-                  },
-                  "body": json.dumps(body)
-              }
-
-          def _get_source_ip(event: dict) -> str:
-              return (
-                  event.get("requestContext", {}).get("http", {}).get("sourceIp")
-                  or event.get("requestContext", {}).get("identity", {}).get("sourceIp")
-                  or "Unknown"
-              )
-
-          def _parse_json_body(event: dict) -> dict:
-              body = event.get("body") or ""
-              if not body:
-                  return {}
-              if event.get("isBase64Encoded"):
-                  body = base64.b64decode(body).decode("utf-8")
-              try:
-                  return json.loads(body)
-              except Exception:
-                  return {}
-
-          def _get_db_creds():
-              secret_name = os.environ["DB_SECRET_NAME"]
-              resp = sm.get_secret_value(SecretId=secret_name)
-              secret = json.loads(resp.get("SecretString", "{}"))
-              return secret["username"], secret["password"]
-
-          def lambda_handler(event, context):
-              method = (
-                  event.get("requestContext", {}).get("http", {}).get("method")
-                  or event.get("httpMethod")
-                  or "GET"
-              )
-
-              if method == "OPTIONS":
-                  return _resp(200, {"ok": True})
-
-              db_host = os.environ["DB_HOST"]
-              db_port = int(os.environ.get("DB_PORT", "3306"))
-              db_name = os.environ["DB_NAME"]
-
-              conn = None
-              cur = None
-              try:
-                  db_user, db_pass = _get_db_creds()
-
-                  conn = mysql.connector.connect(
-                      host=db_host,
-                      port=db_port,
-                      user=db_user,
-                      password=db_pass,
-                      database=db_name,
-                      connect_timeout=10
-                  )
-                  cur = conn.cursor(dictionary=True)
-
-                  if method == "POST":
-                      body = _parse_json_body(event)
-                      city = body.get("city", "Unknown")
-                      state = body.get("state", "Unknown")
-                      country = body.get("country", "Unknown")
-                      ip_addr = _get_source_ip(event)
-
-                      cur.execute(
-                          "INSERT INTO VISITOR_LOG (IP_ADDRESS, CITY_NAME, STATE, COUNTRY) VALUES (%s, %s, %s, %s)",
-                          (ip_addr, city, state, country)
-                      )
-                      conn.commit()
-                      inserted_id = cur.lastrowid
-
-                      cur.execute("SELECT COUNT(*) AS total FROM VISITOR_LOG")
-                      count_row = cur.fetchone()
-                      visitor_count = count_row["total"] if count_row else 0
-
-                      return _resp(200, {
-                          "message": "Check-in successful!",
-                          "id": inserted_id,
-                          "visitor_count": visitor_count,
-                          "ip": ip_addr
-                      })
-
-                  params = event.get("queryStringParameters") or {}
-                  target_id = params.get("id")
-                  if not target_id:
-                      return _resp(400, {"message": "Missing query param: id"})
-
-                  query = """
-                  SELECT
-                    ID as id,
-                    IP_ADDRESS as ip,
-                    CITY_NAME as city,
-                    STATE as region,
-                    COUNTRY as country
-                  FROM VISITOR_LOG
-                  WHERE ID = %s
-                  """
-                  cur.execute(query, (target_id,))
-                  row = cur.fetchone()
-                  if not row:
-                      return _resp(404, {"message": "ID not found"})
-
-                  return _resp(200, row)
-
-              except Exception as e:
-                  return _resp(500, {"error": str(e)})
-              finally:
-                  try:
-                      if cur:
-                          cur.close()
-                      if conn and conn.is_connected():
-                          conn.close()
-                  except Exception:
-                      pass
-
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+        S3ObjectVersion: !Ref CodeObjectVersion
+      Environment:
+        Variables:
+          DB_HOST:
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSEndpoint'
+          DB_PORT:
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSPort'
+          DB_NAME:
+            Fn::ImportValue: !Sub '${RDSStackName}-DBName'
+          DB_SECRET_ARN: !Ref RecoverySecretArn
+          DB_SERVER_UUID: !Ref DBServerUuid
+          DB_RESOURCE_ID: !Ref DatabaseResourceId
+          DB_GENERATION: !Ref WriterGeneration
+          DB_CA_PATH: !Ref DatabaseCaPath
+          DB_CA_SHA256: !Ref DatabaseCaSha256
+          MYSQL_DEPENDENCY_DIGEST: !Ref MysqlDependencyDigest
+          HOMENUB_AUTHORITY_ADAPTER: !Ref AuthorityAdapterModule
+          SITE_ORIGIN: https://www.homenub.com
+          SQL_SESSION_CAP: !Ref SqlSessionCap
+      VpcConfig:
+        SubnetIds: [!ImportValue PrivateSubnet1Id, !ImportValue PrivateSubnet2Id]
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${RDSStackName}-LambdaSecurityGroupId'
+  ReconciliationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      # Lambda VPC ENI APIs require resource wildcard in AWS-managed service policy.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+        - !Ref ReconciliationAuthorityPolicyArn
+      Policies:
+        - PolicyName: ScopedCapabilitySecretAndLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ReconciliationSecretArn
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref ReconciliationKmsKeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.amazonaws.com' 
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt LibraryReconciliationFunctionLogs.Arn
+  LibraryReconciliationFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${LambdaFunctionName}-reconciliation'
+      RetentionInDays: !Ref LogRetentionDays
+  LibraryReconciliationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${LambdaFunctionName}-reconciliation'
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Handler: library_checkout.handlers.reconciliation
+      Role: !GetAtt ReconciliationExecutionRole.Arn
+      Timeout: 35
+      MemorySize: 256
+      ReservedConcurrentExecutions: !Ref PrivateConcurrency
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+        S3ObjectVersion: !Ref CodeObjectVersion
+      Environment:
+        Variables:
+          DB_HOST:
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSEndpoint'
+          DB_PORT:
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSPort'
+          DB_NAME:
+            Fn::ImportValue: !Sub '${RDSStackName}-DBName'
+          DB_SECRET_ARN: !Ref ReconciliationSecretArn
+          DB_SERVER_UUID: !Ref DBServerUuid
+          DB_RESOURCE_ID: !Ref DatabaseResourceId
+          DB_GENERATION: !Ref WriterGeneration
+          DB_CA_PATH: !Ref DatabaseCaPath
+          DB_CA_SHA256: !Ref DatabaseCaSha256
+          MYSQL_DEPENDENCY_DIGEST: !Ref MysqlDependencyDigest
+          HOMENUB_AUTHORITY_ADAPTER: !Ref AuthorityAdapterModule
+          SITE_ORIGIN: https://www.homenub.com
+          SQL_SESSION_CAP: !Ref SqlSessionCap
+      VpcConfig:
+        SubnetIds: [!ImportValue PrivateSubnet1Id, !ImportValue PrivateSubnet2Id]
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${RDSStackName}-LambdaSecurityGroupId'
+  ImportExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      # Lambda VPC ENI APIs require resource wildcard in AWS-managed service policy.
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+        - !Ref ImportAuthorityPolicyArn
+      Policies:
+        - PolicyName: ScopedCapabilitySecretAndLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref ImportSecretArn
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Ref ImportKmsKeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'secretsmanager.${AWS::Region}.amazonaws.com' 
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !GetAtt CatalogImportFunctionLogs.Arn
+  CatalogImportFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${LambdaFunctionName}-catalog_import'
+      RetentionInDays: !Ref LogRetentionDays
+  CatalogImportFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${LambdaFunctionName}-catalog_import'
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Handler: library_checkout.handlers.catalog_import
+      Role: !GetAtt ImportExecutionRole.Arn
+      Timeout: 35
+      MemorySize: 256
+      ReservedConcurrentExecutions: !Ref PrivateConcurrency
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+        S3ObjectVersion: !Ref CodeObjectVersion
+      Environment:
+        Variables:
+          DB_HOST:
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSEndpoint'
+          DB_PORT:
+            Fn::ImportValue: !Sub '${RDSStackName}-RDSPort'
+          DB_NAME:
+            Fn::ImportValue: !Sub '${RDSStackName}-DBName'
+          DB_SECRET_ARN: !Ref ImportSecretArn
+          DB_SERVER_UUID: !Ref DBServerUuid
+          DB_RESOURCE_ID: !Ref DatabaseResourceId
+          DB_GENERATION: !Ref WriterGeneration
+          DB_CA_PATH: !Ref DatabaseCaPath
+          DB_CA_SHA256: !Ref DatabaseCaSha256
+          MYSQL_DEPENDENCY_DIGEST: !Ref MysqlDependencyDigest
+          HOMENUB_AUTHORITY_ADAPTER: !Ref AuthorityAdapterModule
+          SITE_ORIGIN: https://www.homenub.com
+          SQL_SESSION_CAP: !Ref SqlSessionCap
+      VpcConfig:
+        SubnetIds: [!ImportValue PrivateSubnet1Id, !ImportValue PrivateSubnet2Id]
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${RDSStackName}-LambdaSecurityGroupId'
+  RecoveryInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LibraryOperationsFunction
+      Action: lambda:InvokeFunction
+      Principal: !Ref RecoveryExecutorPrincipalArn
+  ReconciliationInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LibraryReconciliationFunction
+      Action: lambda:InvokeFunction
+      Principal: !Ref ReconciliationPrincipalArn
+  ImportInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CatalogImportFunction
+      Action: lambda:InvokeFunction
+      Principal: !Ref ImportPrincipalArn
 Outputs:
   StackName:
     Value: !Ref AWS::StackName
-
   VisitorLambdaArn:
     Value: !GetAtt VisitorInsertLambda.Arn
     Export:
-      Name: !Sub "${AWS::StackName}-VisitorLambdaArn"
-
+      Name: !Sub '${AWS::StackName}-VisitorLambdaArn'
   VisitorLambdaName:
     Value: !Ref VisitorInsertLambda
     Export:
-      Name: !Sub "${AWS::StackName}-VisitorLambdaName"
+      Name: !Sub '${AWS::StackName}-VisitorLambdaName'
+  LibraryOperationsFunctionArn:
+    Value: !GetAtt LibraryOperationsFunction.Arn
+  LibraryReconciliationFunctionArn:
+    Value: !GetAtt LibraryReconciliationFunction.Arn
+  CatalogImportFunctionArn:
+    Value: !GetAtt CatalogImportFunction.Arn
+  MysqlDependencyDigest:
+    Value: !Ref MysqlDependencyDigest
+  DatabaseResourceId:
+    Value: !Ref DatabaseResourceId

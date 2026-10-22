@@ -16,11 +16,18 @@ Parameters:
 
   AllocatedStorage:
     Type: Number
-    Default: 10
+    Default: 20
+    MinValue: 20
 
   EngineVersion:
     Type: String
     Default: "8.0"
+    AllowedValues: ['8.0']
+
+  DatabaseKmsKeyArn:
+    Type: String
+    Description: Regional KMS key authorized for encrypted database and cross-region replication.
+    AllowedPattern: 'arn:aws:kms:us-east-[12]:[0-9]{12}:key/[0-9a-f-]{36}'
 
   ProjectName:
     Type: String
@@ -48,8 +55,24 @@ Parameters:
   # Region for Secrets Manager replication (only used in primary)
   ReplicaRegion:
     Type: String
-    Default: eu-west-2
+    Default: us-east-2
+    AllowedValues: [us-east-2]
 
+Rules:
+  RegionalIdentity:
+    Assertions:
+      - Assert: !Equals [!Select [3, !Split [':', !Ref DatabaseKmsKeyArn]], !Ref 'AWS::Region']
+        AssertDescription: The database KMS key must belong to this region.
+  VirginiaPrimary:
+    RuleCondition: !Equals [!Ref DRMode, primary]
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', us-east-1]
+        AssertDescription: Primary is deployed only in Virginia.
+  OhioReplica:
+    RuleCondition: !Equals [!Ref DRMode, secondary]
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', us-east-2]
+        AssertDescription: Standby is deployed only in Ohio.
 Conditions:
   IsPrimary: !Equals [!Ref DRMode, primary]
   HasPrimaryDbArn: !Not [!Equals [!Ref PrimaryDbArn, ""]]
@@ -63,6 +86,15 @@ Conditions:
   HasDbEndpoint: !Or [!Condition IsPrimary, !Condition CreateReplica]
 
 Resources:
+  MySQLParameters:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Homenub TLS and GTID prerequisites; verify actual applied values before recovery.
+      Family: mysql8.0
+      Parameters:
+        require_secure_transport: 'ON'
+        gtid-mode: 'ON'
+        enforce_gtid_consistency: 'ON'
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
@@ -118,6 +150,10 @@ Resources:
       EngineVersion: !Ref EngineVersion
       DBInstanceClass: !Ref DBInstanceClass
       AllocatedStorage: !Ref AllocatedStorage
+      StorageType: gp2
+      StorageEncrypted: true
+      KmsKeyId: !Ref DatabaseKmsKeyArn
+      DBParameterGroupName: !Ref MySQLParameters
       DBName: !Ref DBName
 
       # Needed for replica eligibility
@@ -147,6 +183,9 @@ Resources:
       SourceRegion: !Select [3, !Split [":", !Ref PrimaryDbArn]]
 
       DBInstanceClass: !Ref DBInstanceClass
+      StorageType: gp2
+      KmsKeyId: !Ref DatabaseKmsKeyArn
+      DBParameterGroupName: !Ref MySQLParameters
       DBSubnetGroupName: !Ref DBSubnetGroup
       VPCSecurityGroups:
         - !Ref RDSSecurityGroup
