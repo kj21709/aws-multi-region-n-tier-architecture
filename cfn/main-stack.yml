@@ -303,6 +303,52 @@
     "RegionalCertificateArn": {
       "Type": "String",
       "AllowedPattern": "arn:aws:acm:us-east-[12]:[0-9]{12}:certificate/[0-9a-f-]{36}"
+    },
+    "EvidenceRetentionDays": {
+      "Type": "Number",
+      "MinValue": 1
+    },
+    "VerifierPrincipalArn": {
+      "Type": "String"
+    },
+    "RepairAuthorizerPrincipalArn": {
+      "Type": "String"
+    },
+    "DeploymentPrincipalArn": {
+      "Type": "String"
+    },
+    "EnableInitialization": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ],
+      "Description": "Phase 1 provisions the actual initializer stack without DDL; enable only after independent registration."
+    },
+    "InspectionSecretArn": {
+      "Type": "String"
+    },
+    "FenceSecretArn": {
+      "Type": "String"
+    },
+    "ExistingOhioControlTableArn": {
+      "Type": "String",
+      "Default": "",
+      "Description": "Actual preprovisioned Ohio control output required by Virginia workers."
+    },
+    "ExistingOhioControlTableName": {
+      "Type": "String",
+      "Default": "",
+      "Description": "Actual preprovisioned Ohio control output required by Virginia workers."
+    },
+    "InspectionKmsKeyArn": {
+      "Type": "String",
+      "Default": ""
+    },
+    "FenceKmsKeyArn": {
+      "Type": "String",
+      "Default": ""
     }
   },
   "Conditions": {
@@ -348,6 +394,29 @@
         },
         {
           "Condition": "CreateReplica"
+        }
+      ]
+    },
+    "IsSecondary": {
+      "Fn::Equals": [
+        {
+          "Ref": "DRMode"
+        },
+        "secondary"
+      ]
+    },
+    "RuntimeEnabled": {
+      "Fn::And": [
+        {
+          "Condition": "HasDbEndpoint"
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableInitialization"
+            },
+            "true"
+          ]
         }
       ]
     }
@@ -424,7 +493,7 @@
     },
     "LambdaBackend": {
       "Type": "AWS::CloudFormation::Stack",
-      "Condition": "HasDbEndpoint",
+      "Condition": "RuntimeEnabled",
       "DependsOn": "Initializer",
       "Properties": {
         "TemplateURL": {
@@ -532,7 +601,7 @@
     },
     "ApiGateway": {
       "Type": "AWS::CloudFormation::Stack",
-      "Condition": "HasDbEndpoint",
+      "Condition": "RuntimeEnabled",
       "DependsOn": "LambdaBackend",
       "Properties": {
         "TemplateURL": {
@@ -696,6 +765,15 @@
           },
           "BootstrapAuthorizationJson": {
             "Ref": "BootstrapAuthorizationJson"
+          },
+          "EnableInitialization": {
+            "Fn::If": [
+              "IsPrimary",
+              {
+                "Ref": "EnableInitialization"
+              },
+              "false"
+            ]
           }
         }
       },
@@ -729,8 +807,183 @@
           }
         }
       },
-      "Condition": "HasDbEndpoint",
+      "Condition": "RuntimeEnabled",
       "DependsOn": "ApiGateway"
+    },
+    "RecoveryControl": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Condition": "IsSecondary",
+      "Properties": {
+        "TemplateURL": {
+          "Fn::Sub": "${NestedTemplateBaseUrl}/recovery-control.yml"
+        },
+        "Parameters": {
+          "ProjectName": {
+            "Ref": "ProjectName"
+          },
+          "Environment": {
+            "Ref": "Environment"
+          },
+          "EvidenceRetentionDays": {
+            "Ref": "EvidenceRetentionDays"
+          },
+          "VerifierPrincipalArn": {
+            "Ref": "VerifierPrincipalArn"
+          },
+          "RepairAuthorizerPrincipalArn": {
+            "Ref": "RepairAuthorizerPrincipalArn"
+          },
+          "RecoveryExecutorPrincipalArn": {
+            "Ref": "RecoveryExecutorPrincipalArn"
+          },
+          "DeploymentPrincipalArn": {
+            "Ref": "DeploymentPrincipalArn"
+          },
+          "CodeBucket": {
+            "Ref": "CodeBucket"
+          },
+          "CodeKey": {
+            "Ref": "CodeKey"
+          },
+          "CodeObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          },
+          "LogRetentionDays": {
+            "Ref": "LogRetentionDays"
+          }
+        }
+      }
+    },
+    "RegionalWorkers": {
+      "Type": "AWS::CloudFormation::Stack",
+      "Condition": "HasDbEndpoint",
+      "DependsOn": "Database",
+      "Properties": {
+        "TemplateURL": {
+          "Fn::Sub": "${NestedTemplateBaseUrl}/regional-workers.yml"
+        },
+        "Parameters": {
+          "ProjectName": {
+            "Ref": "ProjectName"
+          },
+          "Environment": {
+            "Ref": "Environment"
+          },
+          "CodeBucket": {
+            "Ref": "CodeBucket"
+          },
+          "CodeKey": {
+            "Ref": "CodeKey"
+          },
+          "CodeObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          },
+          "DeploymentPrincipalArn": {
+            "Ref": "DeploymentPrincipalArn"
+          },
+          "RecoveryExecutorPrincipalArn": {
+            "Ref": "RecoveryExecutorPrincipalArn"
+          },
+          "DatabaseCaSha256": {
+            "Ref": "DatabaseCaSha256"
+          },
+          "MysqlDependencyDigest": {
+            "Ref": "MysqlDependencyDigest"
+          },
+          "SqlSessionCap": {
+            "Ref": "SqlSessionCap"
+          },
+          "LogRetentionDays": {
+            "Ref": "LogRetentionDays"
+          },
+          "InspectionSecretArn": {
+            "Ref": "InspectionSecretArn"
+          },
+          "FenceSecretArn": {
+            "Ref": "FenceSecretArn"
+          },
+          "VerifierRoleArn": {
+            "Ref": "VerifierPrincipalArn"
+          },
+          "ProvisioningPrincipalArn": {
+            "Ref": "SetupPrincipalArn"
+          },
+          "ControlTableArn": {
+            "Fn::If": [
+              "IsSecondary",
+              {
+                "Fn::GetAtt": [
+                  "RecoveryControl",
+                  "Outputs.ControlTableArn"
+                ]
+              },
+              {
+                "Ref": "ExistingOhioControlTableArn"
+              }
+            ]
+          },
+          "ControlTableName": {
+            "Fn::If": [
+              "IsSecondary",
+              {
+                "Fn::GetAtt": [
+                  "RecoveryControl",
+                  "Outputs.ControlTableName"
+                ]
+              },
+              {
+                "Ref": "ExistingOhioControlTableName"
+              }
+            ]
+          },
+          "DatabaseHost": {
+            "Fn::GetAtt": [
+              "Database",
+              "Outputs.RDSEndpoint"
+            ]
+          },
+          "DatabaseName": {
+            "Ref": "DBName"
+          },
+          "DatabaseResourceId": {
+            "Ref": "DatabaseResourceId"
+          },
+          "DatabaseServerUuid": {
+            "Ref": "DBServerUuid"
+          },
+          "PrivateSubnetIds": {
+            "Fn::Join": [
+              ",",
+              [
+                {
+                  "Fn::GetAtt": [
+                    "VPC",
+                    "Outputs.PrivateSubnet1Id"
+                  ]
+                },
+                {
+                  "Fn::GetAtt": [
+                    "VPC",
+                    "Outputs.PrivateSubnet2Id"
+                  ]
+                }
+              ]
+            ]
+          },
+          "DatabaseSecurityGroupId": {
+            "Fn::GetAtt": [
+              "Database",
+              "Outputs.LambdaSecurityGroupId"
+            ]
+          },
+          "InspectionKmsKeyArn": {
+            "Ref": "InspectionKmsKeyArn"
+          },
+          "FenceKmsKeyArn": {
+            "Ref": "FenceKmsKeyArn"
+          }
+        }
+      }
     }
   },
   "Outputs": {
@@ -792,7 +1045,7 @@
       }
     },
     "ApiId": {
-      "Condition": "HasDbEndpoint",
+      "Condition": "RuntimeEnabled",
       "Value": {
         "Fn::GetAtt": [
           "ApiGateway",
@@ -801,7 +1054,7 @@
       }
     },
     "ApiStageName": {
-      "Condition": "HasDbEndpoint",
+      "Condition": "RuntimeEnabled",
       "Value": {
         "Fn::GetAtt": [
           "ApiGateway",
@@ -810,7 +1063,7 @@
       }
     },
     "ApiBaseUrl": {
-      "Condition": "HasDbEndpoint",
+      "Condition": "RuntimeEnabled",
       "Value": {
         "Fn::GetAtt": [
           "ApiGateway",
@@ -819,7 +1072,7 @@
       }
     },
     "RegionalApiDomainTarget": {
-      "Condition": "HasDbEndpoint",
+      "Condition": "RuntimeEnabled",
       "Value": {
         "Fn::GetAtt": [
           "RegionalApiDomain",
@@ -832,6 +1085,178 @@
     },
     "SiteUrl": {
       "Value": "https://www.homenub.com"
+    },
+    "OhioControlTableName": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.ControlTableName"
+        ]
+      }
+    },
+    "OhioControlTableArn": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.ControlTableArn"
+        ]
+      }
+    },
+    "OhioEvidenceBucketName": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.EvidenceBucketName"
+        ]
+      }
+    },
+    "OhioEvidenceBucketArn": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.EvidenceBucketArn"
+        ]
+      }
+    },
+    "OhioSetupAuthorityPolicyArn": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.SetupAuthorityPolicyArn"
+        ]
+      }
+    },
+    "OhioInspectionAuthorityPolicyArn": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.InspectionAuthorityPolicyArn"
+        ]
+      }
+    },
+    "DeploymentControlFunctionArn": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.DeploymentControlFunctionArn"
+        ]
+      }
+    },
+    "InitializerStackId": {
+      "Condition": "HasDbEndpoint",
+      "Value": {
+        "Ref": "Initializer"
+      }
+    },
+    "DbInitFunctionArn": {
+      "Condition": "HasDbEndpoint",
+      "Value": {
+        "Fn::GetAtt": [
+          "Initializer",
+          "Outputs.DbInitFunctionArn"
+        ]
+      }
+    },
+    "SchemaReadiness": {
+      "Condition": "HasDbEndpoint",
+      "Value": {
+        "Fn::GetAtt": [
+          "Initializer",
+          "Outputs.SchemaReadiness"
+        ]
+      }
+    },
+    "InspectionFunctionArn": {
+      "Condition": "HasDbEndpoint",
+      "Value": {
+        "Fn::GetAtt": [
+          "RegionalWorkers",
+          "Outputs.InspectionFunctionArn"
+        ]
+      }
+    },
+    "BootstrapVerifierFunctionArn": {
+      "Condition": "IsPrimary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RegionalWorkers",
+          "Outputs.BootstrapVerifierFunctionArn"
+        ]
+      }
+    },
+    "SourceFenceFunctionArn": {
+      "Condition": "IsPrimary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RegionalWorkers",
+          "Outputs.SourceFenceFunctionArn"
+        ]
+      }
+    },
+    "DatabaseStackId": {
+      "Value": {
+        "Ref": "Database"
+      }
+    },
+    "FenceEvidenceFunctionArn": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.FenceEvidenceFunctionArn"
+        ]
+      }
+    }
+  },
+  "Rules": {
+    "VirginiaControlInputs": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "DRMode"
+          },
+          "primary"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingOhioControlTableArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Virginia workers require the actual preprovisioned Ohio control table ARN."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "ExistingOhioControlTableName"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Virginia workers require the actual preprovisioned Ohio control table name."
+        }
+      ]
     }
   }
 }

@@ -68,6 +68,13 @@ Parameters:
   BootstrapAuthorizationJson:
     Type: String
     Description: Independent C3 bootstrap evidence JSON, or literal null for ACTIVE_WRITER.
+  EnableInitialization:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+    Description: Phase 1 provisions the actual initializer stack without DDL; enable only after independent registration.
+Conditions:
+  RunInitialization: !Equals [!Ref EnableInitialization, 'true']
 Resources:
   DBInitLambdaRole:
     Type: AWS::IAM::Role
@@ -150,6 +157,7 @@ Resources:
       Principal: !Ref SetupPrincipalArn
   RunTableCreation:
     Type: Custom::TableInit
+    Condition: RunInitialization
     Properties:
       ServiceToken: !GetAtt DBInitLambda.Arn
       ServiceTimeout: 120
@@ -167,6 +175,6 @@ Outputs:
   SchemaDefinitionDigest:
     Value: !Ref SchemaDefinitionDigest
   SchemaReadiness:
-    Value: !GetAtt RunTableCreation.verified
+    Value: !If [RunInitialization, !GetAtt RunTableCreation.verified, UNVERIFIED]
   WriterProtocolVersion:
     Value: '1'

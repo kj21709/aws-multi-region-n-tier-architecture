@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Preprovision regional Homenub API domain. Routing publication is separately readiness controlled.
+Parameters:
+  ApiId: {Type: String}
+  ApiStageName: {Type: String}
+  ApiDomain:
+    Type: String
+    Default: api.homenub.com
+    AllowedValues: [api.homenub.com]
+  RegionalCertificateArn:
+    Type: String
+    AllowedPattern: 'arn:aws:acm:us-east-[12]:[0-9]{12}:certificate/[0-9a-f-]{36}'
+Resources:
+  RegionalApiDomain:
+    Type: AWS::ApiGatewayV2::DomainName
+    Properties:
+      DomainName: !Ref ApiDomain
+      DomainNameConfigurations:
+        - CertificateArn: !Ref RegionalCertificateArn
+          EndpointType: REGIONAL
+          SecurityPolicy: TLS_1_2
+  RegionalApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      ApiId: !Ref ApiId
+      Stage: !Ref ApiStageName
+      DomainName: !Ref RegionalApiDomain
+Outputs:
+  RegionalApiDomainTarget: {Value: !GetAtt RegionalApiDomain.RegionalDomainName}
+  RegionalApiHostedZoneId: {Value: !GetAtt RegionalApiDomain.RegionalHostedZoneId}
+  StableApiBaseUrl: {Value: 'https://api.homenub.com'}

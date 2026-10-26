@@ -1,0 +1,774 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Ohio private recovery consistency and evidence stores. Workflow activation requires separately verified workers and safety proof.",
+  "Parameters": {
+    "ProjectName": {
+      "Type": "String",
+      "Default": "visitor-app"
+    },
+    "Environment": {
+      "Type": "String",
+      "Default": "dev"
+    },
+    "EvidenceRetentionDays": {
+      "Type": "Number",
+      "MinValue": 1
+    },
+    "VerifierPrincipalArn": {
+      "Type": "String",
+      "AllowedPattern": "arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9_+=,.@-]+"
+    },
+    "RepairAuthorizerPrincipalArn": {
+      "Type": "String"
+    },
+    "RecoveryExecutorPrincipalArn": {
+      "Type": "String"
+    },
+    "DeploymentPrincipalArn": {
+      "Type": "String"
+    },
+    "CodeBucket": {
+      "Type": "String"
+    },
+    "CodeKey": {
+      "Type": "String"
+    },
+    "CodeObjectVersion": {
+      "Type": "String"
+    },
+    "LogRetentionDays": {
+      "Type": "Number",
+      "AllowedValues": [
+        1,
+        3,
+        5,
+        7,
+        14,
+        30,
+        60,
+        90,
+        120,
+        150,
+        180,
+        365,
+        400,
+        545,
+        731,
+        1096,
+        1827,
+        2192,
+        2557,
+        2922,
+        3288,
+        3653
+      ]
+    }
+  },
+  "Rules": {
+    "OhioOnly": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Equals": [
+              {
+                "Ref": "AWS::Region"
+              },
+              "us-east-2"
+            ]
+          },
+          "AssertDescription": "Recovery authority and evidence must be outside Virginia."
+        }
+      ]
+    },
+    "SeparateIssuers": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "VerifierPrincipalArn"
+                  },
+                  {
+                    "Ref": "RecoveryExecutorPrincipalArn"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Executor cannot issue its own verifier proof."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "RepairAuthorizerPrincipalArn"
+                  },
+                  {
+                    "Ref": "RecoveryExecutorPrincipalArn"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Repair authorization is independent of the executor."
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "ControlTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "TableName": {
+          "Fn::Sub": "${ProjectName}-${Environment}-recovery-control"
+        },
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "pk",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "pk",
+            "KeyType": "HASH"
+          }
+        ],
+        "SSESpecification": {
+          "SSEEnabled": true
+        },
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": true
+        },
+        "DeletionProtectionEnabled": true
+      }
+    },
+    "EvidenceBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "ObjectLockEnabled": true,
+        "ObjectLockConfiguration": {
+          "ObjectLockEnabled": "Enabled",
+          "Rule": {
+            "DefaultRetention": {
+              "Mode": "COMPLIANCE",
+              "Days": {
+                "Ref": "EvidenceRetentionDays"
+              }
+            }
+          }
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "IgnorePublicAcls": true,
+          "BlockPublicPolicy": true,
+          "RestrictPublicBuckets": true
+        }
+      }
+    },
+    "EvidencePolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "EvidenceBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyUnencryptedTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "EvidenceBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${EvidenceBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            },
+            {
+              "Sid": "DenyExecutorProofWrites",
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": {
+                  "Ref": "RecoveryExecutorPrincipalArn"
+                }
+              },
+              "Action": [
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:DeleteObjectVersion"
+              ],
+              "Resource": {
+                "Fn::Sub": "${EvidenceBucket.Arn}/*"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "SetupAuthorityPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "Conditional current-record setup adapter; cannot write ROOT, permits, intents or verifier observations.",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "dynamodb:GetItem",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControlTable",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": "dynamodb:ConditionCheckItem",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControlTable",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "ROOT",
+                    "PERMIT#*",
+                    "INTENT#*",
+                    "BOOTSTRAP_INTENT#*"
+                  ]
+                },
+                "Null": {
+                  "dynamodb:LeadingKeys": "false"
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControlTable",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "setup-authorizations/*",
+                    "INVOCATION#*",
+                    "COMMAND_INVOCATION#*",
+                    "ADAPTER#*",
+                    "BOOTSTRAP_STEP#*",
+                    "SETUP_SCOPE#*",
+                    "STEP_OBSERVATION#*"
+                  ]
+                },
+                "Null": {
+                  "dynamodb:LeadingKeys": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "InspectionAuthorityPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "Independent SQL metadata observation issuer; cannot change ROOT or deployment permits.",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:ConditionCheckItem"
+              ],
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControlTable",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControlTable",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "INSPECTION#*"
+                  ]
+                },
+                "Null": {
+                  "dynamodb:LeadingKeys": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "DeploymentControlLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-${Environment}-deployment-control"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
+      }
+    },
+    "DeploymentControlRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "CurrentDeploymentControlOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "DeploymentControlLogs",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ControlTable",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "dynamodb:PutItem",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ControlTable",
+                      "Arn"
+                    ]
+                  },
+                  "Condition": {
+                    "ForAllValues:StringLike": {
+                      "dynamodb:LeadingKeys": [
+                        "ROOT",
+                        "PERMIT#*",
+                        "DEPLOYMENT_COMMAND#*"
+                      ]
+                    },
+                    "Null": {
+                      "dynamodb:LeadingKeys": "false"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "DeploymentControlFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-${Environment}-deployment-control"
+        },
+        "Runtime": "python3.12",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "homenub_recovery.handlers.deployment_control",
+        "Role": {
+          "Fn::GetAtt": [
+            "DeploymentControlRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 10,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 1,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "CodeBucket"
+          },
+          "S3Key": {
+            "Ref": "CodeKey"
+          },
+          "S3ObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          }
+        }
+      }
+    },
+    "DeploymentControlInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "DeploymentControlFunction"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": {
+          "Ref": "DeploymentPrincipalArn"
+        }
+      }
+    },
+    "FenceEvidenceLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-${Environment}-fence-evidence"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
+      }
+    },
+    "FenceEvidencePolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Roles": [
+          {
+            "Fn::Select": [
+              1,
+              {
+                "Fn::Split": [
+                  "/",
+                  {
+                    "Ref": "VerifierPrincipalArn"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": {
+                "Fn::GetAtt": [
+                  "FenceEvidenceLogs",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:ConditionCheckItem"
+              ],
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControlTable",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ControlTable",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                  }
+                },
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "EVIDENCE_PUBLICATION#*",
+                    "EVIDENCE#*",
+                    "VERIFICATION#*",
+                    "EXTERNAL_DRAIN#*",
+                    "SETUP_DRAIN#*",
+                    "SETUP_DRAIN_BATCH#*"
+                  ]
+                },
+                "Null": {
+                  "dynamodb:LeadingKeys": "false"
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": "s3:PutObject",
+              "Resource": {
+                "Fn::Sub": "${EvidenceBucket.Arn}/evidence/*"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                  }
+                },
+                "StringEquals": {
+                  "s3:x-amz-server-side-encryption": "AES256"
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": "s3:GetObjectVersion",
+              "Resource": {
+                "Fn::Sub": "${EvidenceBucket.Arn}/evidence/*"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": "s3:ListBucketVersions",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "EvidenceBucket",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                  }
+                },
+                "StringLike": {
+                  "s3:prefix": "evidence/*"
+                }
+              }
+            },
+            {
+              "Effect": "Deny",
+              "Action": "s3:PutObject",
+              "Resource": {
+                "Fn::Sub": "${EvidenceBucket.Arn}/*"
+              },
+              "Condition": {
+                "ArnNotEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Deny",
+              "Action": [
+                "s3:DeleteObject",
+                "s3:DeleteObjectVersion",
+                "s3:PutObjectAcl"
+              ],
+              "Resource": {
+                "Fn::Sub": "${EvidenceBucket.Arn}/*"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "FenceEvidenceFunction": {
+      "Type": "AWS::Lambda::Function",
+      "DependsOn": "FenceEvidencePolicy",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-${Environment}-fence-evidence"
+        },
+        "Runtime": "python3.12",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "homenub_recovery.handlers.fence_evidence",
+        "Role": {
+          "Ref": "VerifierPrincipalArn"
+        },
+        "Timeout": 30,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 1,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "CodeBucket"
+          },
+          "S3Key": {
+            "Ref": "CodeKey"
+          },
+          "S3ObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          }
+        }
+      }
+    },
+    "FenceEvidenceInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "FenceEvidenceFunction"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": {
+          "Ref": "RecoveryExecutorPrincipalArn"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ControlTableName": {
+      "Value": {
+        "Ref": "ControlTable"
+      }
+    },
+    "ControlTableArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "ControlTable",
+          "Arn"
+        ]
+      }
+    },
+    "EvidenceBucketName": {
+      "Value": {
+        "Ref": "EvidenceBucket"
+      }
+    },
+    "EvidenceBucketArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "EvidenceBucket",
+          "Arn"
+        ]
+      }
+    },
+    "SetupAuthorityPolicyArn": {
+      "Value": {
+        "Ref": "SetupAuthorityPolicy"
+      }
+    },
+    "InspectionAuthorityPolicyArn": {
+      "Value": {
+        "Ref": "InspectionAuthorityPolicy"
+      }
+    },
+    "DeploymentControlFunctionArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "DeploymentControlFunction",
+          "Arn"
+        ]
+      }
+    },
+    "FenceEvidenceFunctionArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "FenceEvidenceFunction",
+          "Arn"
+        ]
+      }
+    }
+  }
+}

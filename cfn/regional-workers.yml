@@ -1,0 +1,1054 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Private regional SQL inspection and independent initial/fence workers. No direct Ohio-to-Virginia SQL path.",
+  "Parameters": {
+    "ProjectName": {
+      "Type": "String",
+      "Default": "visitor-app"
+    },
+    "Environment": {
+      "Type": "String",
+      "Default": "dev"
+    },
+    "CodeBucket": {
+      "Type": "String"
+    },
+    "CodeKey": {
+      "Type": "String"
+    },
+    "CodeObjectVersion": {
+      "Type": "String"
+    },
+    "VerifierRoleArn": {
+      "Type": "String",
+      "AllowedPattern": "arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9_+=,.@-]+"
+    },
+    "DeploymentPrincipalArn": {
+      "Type": "String"
+    },
+    "ProvisioningPrincipalArn": {
+      "Type": "String"
+    },
+    "RecoveryExecutorPrincipalArn": {
+      "Type": "String"
+    },
+    "ControlTableArn": {
+      "Type": "String",
+      "AllowedPattern": "arn:aws:dynamodb:us-east-2:[0-9]{12}:table/[A-Za-z0-9_.-]+"
+    },
+    "ControlTableName": {
+      "Type": "String"
+    },
+    "DatabaseHost": {
+      "Type": "String"
+    },
+    "DatabaseName": {
+      "Type": "String"
+    },
+    "DatabaseResourceId": {
+      "Type": "String"
+    },
+    "DatabaseServerUuid": {
+      "Type": "String"
+    },
+    "InspectionSecretArn": {
+      "Type": "String"
+    },
+    "FenceSecretArn": {
+      "Type": "String"
+    },
+    "DatabaseCaSha256": {
+      "Type": "String",
+      "AllowedPattern": "[a-f0-9]{64}"
+    },
+    "MysqlDependencyDigest": {
+      "Type": "String",
+      "AllowedPattern": "[a-f0-9]{64}"
+    },
+    "PrivateSubnetIds": {
+      "Type": "List<AWS::EC2::Subnet::Id>"
+    },
+    "DatabaseSecurityGroupId": {
+      "Type": "AWS::EC2::SecurityGroup::Id"
+    },
+    "SqlSessionCap": {
+      "Type": "Number",
+      "MinValue": 1
+    },
+    "LogRetentionDays": {
+      "Type": "Number",
+      "AllowedValues": [
+        7,
+        14,
+        30,
+        60,
+        90,
+        180,
+        365
+      ]
+    },
+    "InspectionKmsKeyArn": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|arn:aws:kms:us-east-[12]:[0-9]{12}:key/[0-9a-f-]{36}"
+    },
+    "FenceKmsKeyArn": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|arn:aws:kms:us-east-[12]:[0-9]{12}:key/[0-9a-f-]{36}"
+    }
+  },
+  "Conditions": {
+    "Virginia": {
+      "Fn::Equals": [
+        {
+          "Ref": "AWS::Region"
+        },
+        "us-east-1"
+      ]
+    },
+    "HasInspectionKmsKey": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "InspectionKmsKeyArn"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "HasFenceKmsKey": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "FenceKmsKeyArn"
+            },
+            ""
+          ]
+        }
+      ]
+    }
+  },
+  "Rules": {
+    "SupportedRegions": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Or": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  "us-east-1"
+                ]
+              },
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "AWS::Region"
+                  },
+                  "us-east-2"
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Regional workers are limited to Virginia and Ohio."
+        }
+      ]
+    },
+    "SeparateSecrets": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "InspectionSecretArn"
+                  },
+                  {
+                    "Ref": "FenceSecretArn"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "The privileged fencer credential must be distinct from inspection credentials."
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "InspectionLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-${Environment}-inspection"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
+      }
+    },
+    "InspectionFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-${Environment}-inspection"
+        },
+        "Runtime": "python3.12",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "homenub_recovery.handlers.inspection",
+        "Role": {
+          "Ref": "VerifierRoleArn"
+        },
+        "Timeout": 45,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 1,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "CodeBucket"
+          },
+          "S3Key": {
+            "Ref": "CodeKey"
+          },
+          "S3ObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          }
+        },
+        "VpcConfig": {
+          "SubnetIds": {
+            "Ref": "PrivateSubnetIds"
+          },
+          "SecurityGroupIds": [
+            {
+              "Ref": "DatabaseSecurityGroupId"
+            }
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "DB_HOST": {
+              "Ref": "DatabaseHost"
+            },
+            "DB_NAME": {
+              "Ref": "DatabaseName"
+            },
+            "DB_RESOURCE_ID": {
+              "Ref": "DatabaseResourceId"
+            },
+            "DB_SERVER_UUID": {
+              "Ref": "DatabaseServerUuid"
+            },
+            "DB_CA_SHA256": {
+              "Ref": "DatabaseCaSha256"
+            },
+            "MYSQL_DEPENDENCY_DIGEST": {
+              "Ref": "MysqlDependencyDigest"
+            },
+            "SQL_SESSION_CAP": {
+              "Ref": "SqlSessionCap"
+            },
+            "DB_GENERATION": "1",
+            "DB_CA_PATH": "/var/task/certs/rds-ca.pem",
+            "DB_SECRET_ARN": {
+              "Ref": "InspectionSecretArn"
+            },
+            "SITE_ORIGIN": "https://www.homenub.com",
+            "HOMENUB_AUTHORITY_ADAPTER": "homenub_authority.runtime"
+          }
+        }
+      }
+    },
+    "InspectionInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "InspectionFunction"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": {
+          "Ref": "ProvisioningPrincipalArn"
+        }
+      }
+    },
+    "BootstrapVerifierLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-${Environment}-bootstrap-verifier"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
+      },
+      "Condition": "Virginia"
+    },
+    "BootstrapVerifierFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-${Environment}-bootstrap-verifier"
+        },
+        "Runtime": "python3.12",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "homenub_recovery.handlers.initial_deployment_verifier",
+        "Role": {
+          "Ref": "VerifierRoleArn"
+        },
+        "Timeout": 45,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 1,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "CodeBucket"
+          },
+          "S3Key": {
+            "Ref": "CodeKey"
+          },
+          "S3ObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          }
+        },
+        "VpcConfig": {
+          "SubnetIds": {
+            "Ref": "PrivateSubnetIds"
+          },
+          "SecurityGroupIds": [
+            {
+              "Ref": "DatabaseSecurityGroupId"
+            }
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "DB_HOST": {
+              "Ref": "DatabaseHost"
+            },
+            "DB_NAME": {
+              "Ref": "DatabaseName"
+            },
+            "DB_RESOURCE_ID": {
+              "Ref": "DatabaseResourceId"
+            },
+            "DB_SERVER_UUID": {
+              "Ref": "DatabaseServerUuid"
+            },
+            "DB_CA_SHA256": {
+              "Ref": "DatabaseCaSha256"
+            },
+            "MYSQL_DEPENDENCY_DIGEST": {
+              "Ref": "MysqlDependencyDigest"
+            },
+            "SQL_SESSION_CAP": {
+              "Ref": "SqlSessionCap"
+            },
+            "DB_GENERATION": "1",
+            "DB_CA_PATH": "/var/task/certs/rds-ca.pem",
+            "DB_SECRET_ARN": {
+              "Ref": "InspectionSecretArn"
+            },
+            "SITE_ORIGIN": "https://www.homenub.com",
+            "HOMENUB_AUTHORITY_ADAPTER": "homenub_authority.runtime"
+          }
+        }
+      },
+      "Condition": "Virginia"
+    },
+    "BootstrapVerifierInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "BootstrapVerifierFunction"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": {
+          "Ref": "DeploymentPrincipalArn"
+        }
+      },
+      "Condition": "Virginia"
+    },
+    "SourceFenceLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-${Environment}-source-fence"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
+      },
+      "Condition": "Virginia"
+    },
+    "SourceFenceFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-${Environment}-source-fence"
+        },
+        "Runtime": "python3.12",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "homenub_recovery.handlers.source_fence",
+        "Role": {
+          "Ref": "VerifierRoleArn"
+        },
+        "Timeout": 100,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 1,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "CodeBucket"
+          },
+          "S3Key": {
+            "Ref": "CodeKey"
+          },
+          "S3ObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          }
+        },
+        "VpcConfig": {
+          "SubnetIds": {
+            "Ref": "PrivateSubnetIds"
+          },
+          "SecurityGroupIds": [
+            {
+              "Ref": "DatabaseSecurityGroupId"
+            }
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "DB_HOST": {
+              "Ref": "DatabaseHost"
+            },
+            "DB_NAME": {
+              "Ref": "DatabaseName"
+            },
+            "DB_RESOURCE_ID": {
+              "Ref": "DatabaseResourceId"
+            },
+            "DB_SERVER_UUID": {
+              "Ref": "DatabaseServerUuid"
+            },
+            "DB_CA_SHA256": {
+              "Ref": "DatabaseCaSha256"
+            },
+            "MYSQL_DEPENDENCY_DIGEST": {
+              "Ref": "MysqlDependencyDigest"
+            },
+            "SQL_SESSION_CAP": {
+              "Ref": "SqlSessionCap"
+            },
+            "DB_GENERATION": "1",
+            "DB_CA_PATH": "/var/task/certs/rds-ca.pem",
+            "DB_SECRET_ARN": {
+              "Ref": "FenceSecretArn"
+            },
+            "SITE_ORIGIN": "https://www.homenub.com",
+            "HOMENUB_AUTHORITY_ADAPTER": "homenub_authority.runtime"
+          }
+        }
+      },
+      "Condition": "Virginia"
+    },
+    "SourceFenceInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "SourceFenceFunction"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": {
+          "Ref": "RecoveryExecutorPrincipalArn"
+        }
+      },
+      "Condition": "Virginia"
+    },
+    "WorkerPurposePolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "Verifier SDK access is restricted to exact unqualified source functions; no proof/admission writes.",
+        "Roles": [
+          {
+            "Fn::Select": [
+              1,
+              {
+                "Fn::Split": [
+                  "/",
+                  {
+                    "Ref": "VerifierRoleArn"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "ec2:CreateNetworkInterface",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DeleteNetworkInterface",
+                "ec2:AssignPrivateIpAddresses",
+                "ec2:UnassignPrivateIpAddresses"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-inspection:*"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-inspection"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "secretsmanager:GetSecretValue"
+              ],
+              "Resource": {
+                "Ref": "InspectionSecretArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-inspection"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:ConditionCheckItem"
+              ],
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-inspection"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:PutItem"
+              ],
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-inspection"
+                  }
+                },
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "INSPECTION#*"
+                  ]
+                },
+                "Null": {
+                  "dynamodb:LeadingKeys": "false"
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-bootstrap-verifier:*"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "secretsmanager:GetSecretValue"
+              ],
+              "Resource": {
+                "Ref": "InspectionSecretArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:ConditionCheckItem"
+              ],
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:PutItem"
+              ],
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                  }
+                },
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "ROOT",
+                    "BOOTSTRAP_INTENT#*",
+                    "SETUP_SCOPE#*",
+                    "ACTIVATION#*"
+                  ]
+                },
+                "Null": {
+                  "dynamodb:LeadingKeys": "false"
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "rds:DescribeDBInstances"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "cloudformation:DescribeStacks",
+                "cloudformation:ListStackResources"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:cloudformation:us-east-1:${AWS::AccountId}:stack/*/*"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-source-fence:*"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "secretsmanager:GetSecretValue"
+              ],
+              "Resource": {
+                "Ref": "FenceSecretArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:ConditionCheckItem"
+              ],
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:PutItem"
+              ],
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                  }
+                },
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "SQL_FENCE_OBSERVATION#*"
+                  ]
+                },
+                "Null": {
+                  "dynamodb:LeadingKeys": "false"
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "rds:DescribeDBInstances"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                  }
+                }
+              }
+            },
+            {
+              "Sid": "DenyOtherFunctionsInspectionSecretArn",
+              "Effect": "Deny",
+              "Action": "secretsmanager:GetSecretValue",
+              "Resource": {
+                "Ref": "InspectionSecretArn"
+              },
+              "Condition": {
+                "ArnNotEquals": {
+                  "lambda:SourceFunctionArn": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-1:${AWS::AccountId}:function:${ProjectName}-${Environment}-inspection"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-1:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-inspection"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "DenyOtherFunctionsFenceSecretArn",
+              "Effect": "Deny",
+              "Action": "secretsmanager:GetSecretValue",
+              "Resource": {
+                "Ref": "FenceSecretArn"
+              },
+              "Condition": {
+                "ArnNotEquals": {
+                  "lambda:SourceFunctionArn": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-1:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "DenyUnregisteredVerifierWrites",
+              "Effect": "Deny",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnNotEquals": {
+                  "lambda:SourceFunctionArn": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-1:${AWS::AccountId}:function:${ProjectName}-${Environment}-inspection"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-1:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-1:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-inspection"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "DenyMissingLeadingKeys",
+              "Effect": "Deny",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "Null": {
+                  "dynamodb:LeadingKeys": "true"
+                }
+              }
+            },
+            {
+              "Effect": "Deny",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-inspection"
+                  }
+                },
+                "ForAnyValue:StringNotLike": {
+                  "dynamodb:LeadingKeys": [
+                    "INSPECTION#*"
+                  ]
+                }
+              }
+            },
+            {
+              "Effect": "Deny",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                  }
+                },
+                "ForAnyValue:StringNotLike": {
+                  "dynamodb:LeadingKeys": [
+                    "ROOT",
+                    "BOOTSTRAP_INTENT#*",
+                    "SETUP_SCOPE#*",
+                    "ACTIVATION#*"
+                  ]
+                }
+              }
+            },
+            {
+              "Effect": "Deny",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-source-fence"
+                  }
+                },
+                "ForAnyValue:StringNotLike": {
+                  "dynamodb:LeadingKeys": [
+                    "SQL_FENCE_OBSERVATION#*"
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "DenyOtherAuthorityMutations",
+              "Effect": "Deny",
+              "NotAction": [
+                "dynamodb:GetItem",
+                "dynamodb:ConditionCheckItem",
+                "dynamodb:PutItem",
+                "dynamodb:DescribeTable"
+              ],
+              "Resource": {
+                "Ref": "ControlTableArn"
+              }
+            },
+            {
+              "Fn::If": [
+                "HasInspectionKmsKey",
+                {
+                  "Effect": "Allow",
+                  "Action": "kms:Decrypt",
+                  "Resource": {
+                    "Ref": "InspectionKmsKeyArn"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "kms:ViaService": {
+                        "Fn::Sub": "secretsmanager.${AWS::Region}.amazonaws.com"
+                      },
+                      "kms:EncryptionContext:SecretARN": {
+                        "Ref": "InspectionSecretArn"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
+            },
+            {
+              "Fn::If": [
+                "HasFenceKmsKey",
+                {
+                  "Effect": "Allow",
+                  "Action": "kms:Decrypt",
+                  "Resource": {
+                    "Ref": "FenceKmsKeyArn"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "kms:ViaService": {
+                        "Fn::Sub": "secretsmanager.${AWS::Region}.amazonaws.com"
+                      },
+                      "kms:EncryptionContext:SecretARN": {
+                        "Ref": "FenceSecretArn"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
+            },
+            {
+              "Effect": "Deny",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                  }
+                },
+                "ForAnyValue:StringNotLike": {
+                  "dynamodb:LeadingKeys": [
+                    "EVIDENCE_PUBLICATION#*",
+                    "EVIDENCE#*",
+                    "VERIFICATION#*",
+                    "EXTERNAL_DRAIN#*",
+                    "SETUP_DRAIN#*",
+                    "SETUP_DRAIN_BATCH#*"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "InspectionFunctionArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "InspectionFunction",
+          "Arn"
+        ]
+      }
+    },
+    "BootstrapVerifierFunctionArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "BootstrapVerifierFunction",
+          "Arn"
+        ]
+      },
+      "Condition": "Virginia"
+    },
+    "SourceFenceFunctionArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "SourceFenceFunction",
+          "Arn"
+        ]
+      },
+      "Condition": "Virginia"
+    }
+  }
+}

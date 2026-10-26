@@ -59,10 +59,6 @@ Parameters:
     AllowedValues: [us-east-2]
 
 Rules:
-  RegionalIdentity:
-    Assertions:
-      - Assert: !Equals [!Select [3, !Split [':', !Ref DatabaseKmsKeyArn]], !Ref 'AWS::Region']
-        AssertDescription: The database KMS key must belong to this region.
   VirginiaPrimary:
     RuleCondition: !Equals [!Ref DRMode, primary]
     Assertions:
@@ -95,6 +91,7 @@ Resources:
         require_secure_transport: 'ON'
         gtid-mode: 'ON'
         enforce_gtid_consistency: 'ON'
+        performance_schema: '1'
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:

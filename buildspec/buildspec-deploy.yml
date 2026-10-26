@@ -20,7 +20,8 @@
         "python3 -m checks.library --report verification/library.json",
         "python3 -m checks.schema --report verification/schema.json",
         "python3 -m checks.recovery --report verification/recovery.json",
-        "python3 -m checks.restore --report verification/restore.json"
+        "python3 -m checks.restore --report verification/restore.json",
+        "python3 -m checks.journey --report verification/journey.json"
       ]
     }
   },
