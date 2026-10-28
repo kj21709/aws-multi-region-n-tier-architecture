@@ -349,6 +349,14 @@
     "FenceKmsKeyArn": {
       "Type": "String",
       "Default": ""
+    },
+    "EnableControlRuntime": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
     }
   },
   "Conditions": {
@@ -414,6 +422,21 @@
           "Fn::Equals": [
             {
               "Ref": "EnableInitialization"
+            },
+            "true"
+          ]
+        }
+      ]
+    },
+    "ControlRuntimeEnabled": {
+      "Fn::And": [
+        {
+          "Condition": "IsSecondary"
+        },
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "EnableControlRuntime"
             },
             "true"
           ]
@@ -850,6 +873,9 @@
           },
           "LogRetentionDays": {
             "Ref": "LogRetentionDays"
+          },
+          "EnableControlRuntime": {
+            "Ref": "EnableControlRuntime"
           }
         }
       }
@@ -1141,7 +1167,7 @@
       }
     },
     "DeploymentControlFunctionArn": {
-      "Condition": "IsSecondary",
+      "Condition": "ControlRuntimeEnabled",
       "Value": {
         "Fn::GetAtt": [
           "RecoveryControl",
@@ -1206,11 +1232,47 @@
       }
     },
     "FenceEvidenceFunctionArn": {
-      "Condition": "IsSecondary",
+      "Condition": "ControlRuntimeEnabled",
       "Value": {
         "Fn::GetAtt": [
           "RecoveryControl",
           "Outputs.FenceEvidenceFunctionArn"
+        ]
+      }
+    },
+    "TargetCatchupFunctionArn": {
+      "Condition": "CreateReplica",
+      "Value": {
+        "Fn::GetAtt": [
+          "RegionalWorkers",
+          "Outputs.TargetCatchupFunctionArn"
+        ]
+      }
+    },
+    "OhioDeploymentControlRoleArn": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.DeploymentControlRoleArn"
+        ]
+      }
+    },
+    "OhioControlRuntimeState": {
+      "Condition": "IsSecondary",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.ControlRuntimeState"
+        ]
+      }
+    },
+    "InitialDeploymentFunctionArn": {
+      "Condition": "ControlRuntimeEnabled",
+      "Value": {
+        "Fn::GetAtt": [
+          "RecoveryControl",
+          "Outputs.InitialDeploymentFunctionArn"
         ]
       }
     }

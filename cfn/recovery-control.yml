@@ -62,6 +62,15 @@
         3288,
         3653
       ]
+    },
+    "EnableControlRuntime": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "Create private functions only after actual foundation role/table outputs are packaged into verified configuration."
     }
   },
   "Rules": {
@@ -403,6 +412,13 @@
                       "DeploymentControlLogs",
                       "Arn"
                     ]
+                  },
+                  "Condition": {
+                    "ArnEquals": {
+                      "lambda:SourceFunctionArn": {
+                        "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-deployment-control"
+                      }
+                    }
                   }
                 },
                 {
@@ -416,6 +432,18 @@
                       "ControlTable",
                       "Arn"
                     ]
+                  },
+                  "Condition": {
+                    "ArnEquals": {
+                      "lambda:SourceFunctionArn": [
+                        {
+                          "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-deployment-control"
+                        },
+                        {
+                          "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-initial-deployment"
+                        }
+                      ]
+                    }
                   }
                 },
                 {
@@ -437,6 +465,122 @@
                     },
                     "Null": {
                       "dynamodb:LeadingKeys": "false"
+                    },
+                    "ArnEquals": {
+                      "lambda:SourceFunctionArn": {
+                        "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-deployment-control"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "InitialDeploymentLogs",
+                      "Arn"
+                    ]
+                  },
+                  "Condition": {
+                    "ArnEquals": {
+                      "lambda:SourceFunctionArn": {
+                        "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-initial-deployment"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "dynamodb:PutItem",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ControlTable",
+                      "Arn"
+                    ]
+                  },
+                  "Condition": {
+                    "ArnEquals": {
+                      "lambda:SourceFunctionArn": {
+                        "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-initial-deployment"
+                      }
+                    },
+                    "ForAllValues:StringLike": {
+                      "dynamodb:LeadingKeys": [
+                        "ROOT",
+                        "INITIAL_DEPLOYMENT#*",
+                        "EXTERNAL_ACTION#*"
+                      ]
+                    },
+                    "Null": {
+                      "dynamodb:LeadingKeys": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Deny",
+                  "Action": "dynamodb:PutItem",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ControlTable",
+                      "Arn"
+                    ]
+                  },
+                  "Condition": {
+                    "ArnEquals": {
+                      "lambda:SourceFunctionArn": {
+                        "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-initial-deployment"
+                      }
+                    },
+                    "ForAnyValue:StringNotLike": {
+                      "dynamodb:LeadingKeys": [
+                        "ROOT",
+                        "INITIAL_DEPLOYMENT#*",
+                        "EXTERNAL_ACTION#*"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "cloudformation:DescribeStacks",
+                    "cloudformation:GetTemplate",
+                    "cloudformation:UpdateStack"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudformation:us-east-1:${AWS::AccountId}:stack/*/*"
+                  },
+                  "Condition": {
+                    "ArnEquals": {
+                      "lambda:SourceFunctionArn": {
+                        "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-initial-deployment"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Effect": "Deny",
+                  "Action": "dynamodb:PutItem",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ControlTable",
+                      "Arn"
+                    ]
+                  },
+                  "Condition": {
+                    "ArnNotEquals": {
+                      "lambda:SourceFunctionArn": [
+                        {
+                          "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-deployment-control"
+                        },
+                        {
+                          "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-initial-deployment"
+                        }
+                      ]
                     }
                   }
                 }
@@ -477,7 +621,8 @@
             "Ref": "CodeObjectVersion"
           }
         }
-      }
+      },
+      "Condition": "ControlRuntimeEnabled"
     },
     "DeploymentControlInvoke": {
       "Type": "AWS::Lambda::Permission",
@@ -489,7 +634,8 @@
         "Principal": {
           "Ref": "DeploymentPrincipalArn"
         }
-      }
+      },
+      "Condition": "ControlRuntimeEnabled"
     },
     "FenceEvidenceLogs": {
       "Type": "AWS::Logs::LogGroup",
@@ -702,7 +848,8 @@
             "Ref": "CodeObjectVersion"
           }
         }
-      }
+      },
+      "Condition": "ControlRuntimeEnabled"
     },
     "FenceEvidenceInvoke": {
       "Type": "AWS::Lambda::Permission",
@@ -714,7 +861,66 @@
         "Principal": {
           "Ref": "RecoveryExecutorPrincipalArn"
         }
+      },
+      "Condition": "ControlRuntimeEnabled"
+    },
+    "InitialDeploymentLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-${Environment}-initial-deployment"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
       }
+    },
+    "InitialDeploymentFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-${Environment}-initial-deployment"
+        },
+        "Runtime": "python3.12",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "homenub_recovery.handlers.initial_deployment_control",
+        "Role": {
+          "Fn::GetAtt": [
+            "DeploymentControlRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 10,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 1,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "CodeBucket"
+          },
+          "S3Key": {
+            "Ref": "CodeKey"
+          },
+          "S3ObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          }
+        }
+      },
+      "Condition": "ControlRuntimeEnabled"
+    },
+    "InitialDeploymentInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "InitialDeploymentFunction"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": {
+          "Ref": "DeploymentPrincipalArn"
+        }
+      },
+      "Condition": "ControlRuntimeEnabled"
     }
   },
   "Outputs": {
@@ -760,7 +966,8 @@
           "DeploymentControlFunction",
           "Arn"
         ]
-      }
+      },
+      "Condition": "ControlRuntimeEnabled"
     },
     "FenceEvidenceFunctionArn": {
       "Value": {
@@ -768,7 +975,44 @@
           "FenceEvidenceFunction",
           "Arn"
         ]
+      },
+      "Condition": "ControlRuntimeEnabled"
+    },
+    "DeploymentControlRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "DeploymentControlRole",
+          "Arn"
+        ]
       }
+    },
+    "ControlRuntimeState": {
+      "Value": {
+        "Fn::If": [
+          "ControlRuntimeEnabled",
+          "CONFIGURED_NOT_VERIFIED",
+          "DISABLED_UNVERIFIED"
+        ]
+      }
+    },
+    "InitialDeploymentFunctionArn": {
+      "Condition": "ControlRuntimeEnabled",
+      "Value": {
+        "Fn::GetAtt": [
+          "InitialDeploymentFunction",
+          "Arn"
+        ]
+      }
+    }
+  },
+  "Conditions": {
+    "ControlRuntimeEnabled": {
+      "Fn::Equals": [
+        {
+          "Ref": "EnableControlRuntime"
+        },
+        "true"
+      ]
     }
   }
 }

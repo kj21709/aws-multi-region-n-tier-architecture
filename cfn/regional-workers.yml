@@ -130,6 +130,14 @@
           ]
         }
       ]
+    },
+    "Ohio": {
+      "Fn::Equals": [
+        {
+          "Ref": "AWS::Region"
+        },
+        "us-east-2"
+      ]
     }
   },
   "Rules": {
@@ -676,7 +684,8 @@
               "Effect": "Allow",
               "Action": [
                 "cloudformation:DescribeStacks",
-                "cloudformation:ListStackResources"
+                "cloudformation:ListStackResources",
+                "cloudformation:GetTemplate"
               ],
               "Resource": {
                 "Fn::Sub": "arn:${AWS::Partition}:cloudformation:us-east-1:${AWS::AccountId}:stack/*/*"
@@ -755,7 +764,9 @@
                 },
                 "ForAllValues:StringLike": {
                   "dynamodb:LeadingKeys": [
-                    "SQL_FENCE_OBSERVATION#*"
+                    "SQL_FENCE_OBSERVATION#*",
+                    "ROOT",
+                    "SOURCE_FENCE_REQUEST#*"
                   ]
                 },
                 "Null": {
@@ -798,6 +809,9 @@
                     },
                     {
                       "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-bootstrap-verifier"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-target-catchup"
                     }
                   ]
                 }
@@ -853,6 +867,9 @@
                     },
                     {
                       "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-fence-evidence"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-target-catchup"
                     }
                   ]
                 }
@@ -926,7 +943,9 @@
                 },
                 "ForAnyValue:StringNotLike": {
                   "dynamodb:LeadingKeys": [
-                    "SQL_FENCE_OBSERVATION#*"
+                    "SQL_FENCE_OBSERVATION#*",
+                    "ROOT",
+                    "SOURCE_FENCE_REQUEST#*"
                   ]
                 }
               }
@@ -1017,10 +1036,215 @@
                   ]
                 }
               }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-target-catchup:*"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-target-catchup"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "secretsmanager:GetSecretValue"
+              ],
+              "Resource": {
+                "Ref": "InspectionSecretArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-target-catchup"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:ConditionCheckItem"
+              ],
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-target-catchup"
+                  }
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "dynamodb:PutItem"
+              ],
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-target-catchup"
+                  }
+                },
+                "ForAllValues:StringLike": {
+                  "dynamodb:LeadingKeys": [
+                    "REPLICA_OBSERVATION#*"
+                  ]
+                },
+                "Null": {
+                  "dynamodb:LeadingKeys": "false"
+                }
+              }
+            },
+            {
+              "Effect": "Deny",
+              "Action": "dynamodb:PutItem",
+              "Resource": {
+                "Ref": "ControlTableArn"
+              },
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-target-catchup"
+                  }
+                },
+                "ForAnyValue:StringNotLike": {
+                  "dynamodb:LeadingKeys": [
+                    "REPLICA_OBSERVATION#*"
+                  ]
+                }
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "rds:DescribeDBInstances"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "ArnEquals": {
+                  "lambda:SourceFunctionArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:us-east-2:${AWS::AccountId}:function:${ProjectName}-${Environment}-target-catchup"
+                  }
+                }
+              }
             }
           ]
         }
       }
+    },
+    "TargetCatchupLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${ProjectName}-${Environment}-target-catchup"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
+      },
+      "Condition": "Ohio"
+    },
+    "TargetCatchupFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${ProjectName}-${Environment}-target-catchup"
+        },
+        "Runtime": "python3.12",
+        "Architectures": [
+          "x86_64"
+        ],
+        "Handler": "homenub_recovery.handlers.target_catchup",
+        "Role": {
+          "Ref": "VerifierRoleArn"
+        },
+        "Timeout": 100,
+        "MemorySize": 256,
+        "ReservedConcurrentExecutions": 1,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "CodeBucket"
+          },
+          "S3Key": {
+            "Ref": "CodeKey"
+          },
+          "S3ObjectVersion": {
+            "Ref": "CodeObjectVersion"
+          }
+        },
+        "VpcConfig": {
+          "SubnetIds": {
+            "Ref": "PrivateSubnetIds"
+          },
+          "SecurityGroupIds": [
+            {
+              "Ref": "DatabaseSecurityGroupId"
+            }
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "DB_HOST": {
+              "Ref": "DatabaseHost"
+            },
+            "DB_NAME": {
+              "Ref": "DatabaseName"
+            },
+            "DB_RESOURCE_ID": {
+              "Ref": "DatabaseResourceId"
+            },
+            "DB_SERVER_UUID": {
+              "Ref": "DatabaseServerUuid"
+            },
+            "DB_CA_SHA256": {
+              "Ref": "DatabaseCaSha256"
+            },
+            "MYSQL_DEPENDENCY_DIGEST": {
+              "Ref": "MysqlDependencyDigest"
+            },
+            "SQL_SESSION_CAP": {
+              "Ref": "SqlSessionCap"
+            },
+            "DB_GENERATION": "1",
+            "DB_CA_PATH": "/var/task/certs/rds-ca.pem",
+            "DB_SECRET_ARN": {
+              "Ref": "InspectionSecretArn"
+            },
+            "SITE_ORIGIN": "https://www.homenub.com",
+            "HOMENUB_AUTHORITY_ADAPTER": "homenub_authority.runtime"
+          }
+        }
+      },
+      "Condition": "Ohio"
+    },
+    "TargetCatchupInvoke": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "TargetCatchupFunction"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": {
+          "Ref": "RecoveryExecutorPrincipalArn"
+        }
+      },
+      "Condition": "Ohio"
     }
   },
   "Outputs": {
@@ -1049,6 +1273,15 @@
         ]
       },
       "Condition": "Virginia"
+    },
+    "TargetCatchupFunctionArn": {
+      "Condition": "Ohio",
+      "Value": {
+        "Fn::GetAtt": [
+          "TargetCatchupFunction",
+          "Arn"
+        ]
+      }
     }
   }
 }
